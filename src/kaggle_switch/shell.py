@@ -1,5 +1,6 @@
 """Shell integration function generation."""
 from __future__ import annotations
+from pathlib import Path
 
 SUPPORTED_SHELLS = ("zsh", "bash", "fish")
 

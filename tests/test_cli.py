@@ -33,7 +33,7 @@ def run_cli(*args, capsys) -> tuple[int, str]:
 
 class TestList:
     def test_no_accounts_message(self, temp_env, capsys):
-        rc, out = run_cli(capsys)
+        rc, out = run_cli(capsys=capsys)
         assert rc == 1
         assert "No accounts configured" in out
 
