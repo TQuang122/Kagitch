@@ -6,7 +6,6 @@ from pathlib import Path
 
 from . import __version__
 from .config import (
-    Account,
     add_account,
     current_active,
     find_account,
@@ -18,32 +17,44 @@ from .config import (
     switch_marker,
 )
 from .shell import (
-    SUPPORTED_SHELLS,
     detect_shell,
     eval_line_for_shell,
     rc_file_for_shell,
     shellpath,
 )
-from .style import bold, bold_cyan, bold_green, bold_red, cyan, dim, green, red, yellow
+from .style import (
+    bordered_table,
+    card,
+    bold,
+    bold_red,
+    cyan,
+    dim,
+    fail,
+    info,
+    ok,
+    pad_to,
+    prompt,
+    warn,
+)
 
-USAGE = """\
-kaggle-switch — Kaggle multi-account manager
+USAGE = f"""\
+{bold("kaggle-switch")} — {cyan("Kaggle multi-account manager")}
 
-Usage:
-    kaggle-switch                 List accounts + show current
-    kaggle-switch <N>             Switch to account N
-    kaggle-switch list            List all accounts
-    kaggle-switch current         Show active account
-    kaggle-switch add <name> [kaggle.json path]
+{bold("Usage:")}
+    {cyan("kaggle-switch")}                 List accounts + show current
+    {cyan("kaggle-switch")} {bold("<N>")}             Switch to account N
+    {cyan("kaggle-switch")} list            List all accounts
+    {cyan("kaggle-switch")} current         Show active account
+    {cyan("kaggle-switch")} add {bold("<name>")} [{bold("<kaggle.json>")}]
                                   Register a new account
-    kaggle-switch remove <N|name> Remove an account
-    kaggle-switch rename <N> <new_name>
+    {cyan("kaggle-switch")} remove {bold("<N|name>")} Remove an account
+    {cyan("kaggle-switch")} rename {bold("<N>")} {bold("<new_name>")}
                                   Rename an account
-    kaggle-switch shellpath <zsh|bash|fish>
+    {cyan("kaggle-switch")} shellpath {bold("<zsh|bash|fish>")}
                                   Print shell function for integration
-    kaggle-switch init            Auto-install shell integration
-    kaggle-switch --version       Show version
-    kaggle-switch --help          Show this help
+    {cyan("kaggle-switch")} init            Auto-install shell integration
+    {cyan("kaggle-switch")} {dim("--version")}       Show version
+    {cyan("kaggle-switch")} {dim("--help")}          Show this help
 """
 
 
@@ -51,35 +62,48 @@ def cmd_list(config: dict) -> int:
     active = current_active(config)
     accounts = get_accounts(config)
     if not accounts:
-        print(yellow("No accounts configured."))
-        print(f"Run: {bold_cyan("kaggle-switch add <name> /path/to/kaggle.json")}")
+        print(warn("No accounts configured."))
+        print(f"  Run: {bold("kaggle-switch add <name> /path/to/kaggle.json")}")
         return 1
-    header = f"{bold_cyan('#    Name                 Config Dir                                    Status')}"
-    print(header)
-    print(dim(f"{'─'*4} {'─'*20} {'─'*45} {'─'*8}"))
-    for acc in accounts:
-        status = bold_green("● active") if acc.number == active else ""
-        print(f"{acc.number:<4} {acc.name:<20} {str(acc.path):<45} {status}")
+
+    headers = ["#", "Name", "Config Dir", "Status"]
+    rows: list[list[str]] = []
+    active_idx: int | None = None
+    for i, acc in enumerate(accounts):
+        status = "● active" if acc.number == active else ""
+        if acc.number == active:
+            active_idx = i
+        rows.append([str(acc.number), acc.name, str(acc.path), status])
+
+    print(bordered_table(headers, rows, active_index=active_idx))
     return 0
 
 
 def cmd_current(config: dict) -> int:
     n = current_active(config)
     if n is None:
-        print(yellow("No account active (using default ~/.kaggle)"))
+        print(warn("No account active (using default ~/.kaggle)"))
         return 0
+
     acc = find_account(config, n)
-    if acc:
-        print(cyan(f"Account {n}: {acc.name}  ({acc.path})"))
-    else:
-        print(f"Account {n}")
+    if acc is None:
+        print(warn(f"Account {n} not found in config"))
+        return 1
+
+    label = "default" if acc.is_default else "custom"
+    lines = [
+        f"Account #{acc.number}  {bold(acc.name)}",
+        "",
+        f"  {cyan("\u25b6")}  {acc.path}  ({dim(label)})",
+    ]
+    print(card(lines, title="Active Account", color=cyan))
     return 0
 
 
 def cmd_switch(config: dict, key: str) -> int:
     acc = find_account(config, key)
     if acc is None:
-        print(red(f"Account '{key}' not found"))
+        print(fail(f"Account '{key}' not found"))
         return 1
     print(switch_marker(acc))
     return 0
@@ -87,30 +111,30 @@ def cmd_switch(config: dict, key: str) -> int:
 
 def cmd_add(config: dict, args: list[str]) -> int:
     if not args:
-        print(yellow("Usage: kaggle-switch add <name> [kaggle.json path]"))
+        print(warn("Usage: kaggle-switch add <name> [kaggle.json path]"))
         return 1
     name = args[0]
     json_path = Path(args[1]) if len(args) >= 2 else None
     try:
         acc = add_account(config, name, json_path)
-        print(green(f"Added account #{acc.number}: {acc.name}  ({acc.path}/)"))
+        print(ok(f"Added account #{acc.number}: {acc.name}  ({acc.path}/)"))
         return 0
     except (ValueError, FileNotFoundError) as e:
-        print(red(str(e)))
+        print(fail(str(e)))
         return 1
 
 
 def cmd_remove(config: dict, args: list[str]) -> int:
     if not args:
-        print(yellow("Usage: kaggle-switch remove <N|name>"))
+        print(warn("Usage: kaggle-switch remove <N|name>"))
         return 1
     try:
         acc = remove_account(config, args[0])
-        print(yellow(f"Remove account #{acc.number}: {acc.name}?"), end="", flush=True)
+        print(prompt(f"Remove account #{acc.number}: {acc.name}?"), end="", flush=True)
         print(" [y/N] ", end="", flush=True)
         resp = sys.stdin.readline().strip().lower()
         if resp == "y":
-            print(green("Removed."))
+            print(ok("Removed."))
         else:
             print(dim("Cancelled."))
             # Re-add since we already deleted
@@ -118,20 +142,20 @@ def cmd_remove(config: dict, args: list[str]) -> int:
             save_config(config)
         return 0
     except KeyError as e:
-        print(red(str(e)))
+        print(fail(str(e)))
         return 1
 
 
 def cmd_rename(config: dict, args: list[str]) -> int:
     if len(args) < 2:
-        print(yellow("Usage: kaggle-switch rename <N> <new_name>"))
+        print(warn("Usage: kaggle-switch rename <N> <new_name>"))
         return 1
     try:
         acc = rename_account(config, args[0], args[1])
-        print(green(f"Renamed #{acc.number}: {acc.name}"))
+        print(ok(f"Renamed #{acc.number}: {acc.name}"))
         return 0
     except KeyError as e:
-        print(red(str(e)))
+        print(fail(str(e)))
         return 1
 
 
@@ -141,7 +165,7 @@ def cmd_shellpath(args: list[str]) -> int:
         print(shellpath(shell), end="")
         return 0
     except ValueError as e:
-        print(red(str(e)))
+        print(fail(str(e)))
         return 1
 
 
@@ -149,7 +173,7 @@ def cmd_init() -> int:
     shell = detect_shell()
     rc = rc_file_for_shell(shell)
     if rc is None:
-        print(red(f"Cannot detect rc file for shell: {shell}"))
+        print(fail(f"Cannot detect rc file for shell: {shell}"))
         return 1
 
     eval_line = eval_line_for_shell(shell)
@@ -157,17 +181,17 @@ def cmd_init() -> int:
     if rc.exists():
         content = rc.read_text()
         if "kaggle-switch" in content and "shellpath" in content:
-            print(cyan(f"Shell integration already exists in {rc}"))
-            print(f"Restart your shell or run: {bold('source ' + str(rc))}")
+            print(info(f"Shell integration already exists in {rc}"))
+            print(f"  Restart your shell or run: {bold('source ' + str(rc))}")
             return 0
 
-    print(cyan(f"Detected shell: {shell}"))
-    print(f"Adding shell integration to: {rc}")
+    print(info(f"Detected shell: {shell}"))
+    print(f"  Adding shell integration to: {rc}")
     rc.parent.mkdir(parents=True, exist_ok=True)
     with open(rc, "a") as f:
         f.write(f"\n# kaggle-switch shell integration\n{eval_line}\n")
     print()
-    print(green("Done! Restart your shell or run:"))
+    print(ok("Done! Restart your shell or run:"))
     print(f"  {bold('source ' + str(rc))}")
     return 0
 
@@ -198,7 +222,7 @@ def main() -> int:
 
     if cmd == "switch":
         if not rest:
-            print(yellow("Usage: kaggle-switch switch <N>"))
+            print(warn("Usage: kaggle-switch switch <N>"))
             return 1
         return cmd_switch(config, rest[0])
 
@@ -221,7 +245,7 @@ def main() -> int:
     if cmd.isdigit() or (cmd.startswith("-") and cmd[1:].isdigit()):
         return cmd_switch(config, cmd)
 
-    print(red(f"Unknown command: {cmd}"))
+    print(fail(f"Unknown command: {cmd}"))
     print(USAGE)
     return 1
 
