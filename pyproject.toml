@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kaggle-switch"
+version = "1.0.0"
+description = "Kaggle multi-account manager — switch between Kaggle accounts with one command."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [{ name = "jky" }]
+keywords = ["kaggle", "multi-account", "switch", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.scripts]
+kaggle-switch = "kaggle_switch.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/jky/kaggle-switch"
+Repository = "https://github.com/jky/kaggle-switch"
+Issues = "https://github.com/jky/kaggle-switch/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kaggle_switch"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
