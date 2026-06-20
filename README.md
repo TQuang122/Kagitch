@@ -42,11 +42,11 @@ kaggle quota          # kaggle CLI follows the switched account
 | Command                     | Aliases                  | What it does                            |
 | --------------------------- | ------------------------ | --------------------------------------- |
 | `kagitch` / `list`          | `ls`                     | List accounts                           |
-| `kagitch <N|name>`          |                          | Switch to account                       |
+| `kagitch <N\|name>`         |                          | Switch to account                       |
 | `kagitch current`           | `cur`, `.`               | Show active account                     |
 | `kagitch add <name>`        | `login`                  | Add account via OAuth                   |
 | `kagitch add <name> <file>` |                          | Add account via legacy API key          |
-| `kagitch remove <N|name>`   | `rm`                     | Remove an account (deletes credentials) |
+| `kagitch remove <N\|name>`  | `rm`                     | Remove an account (deletes credentials) |
 | `kagitch rename <N> <name>` |                          | Rename an account                       |
 | `kagitch patch [path]`      |                          | Patch `kernel-metadata.json` id         |
 | `kagitch check`             |                          | Check quota & auth for all accounts     |
