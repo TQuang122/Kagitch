@@ -115,6 +115,10 @@ def render_help() -> None:
                 ("kagitch check", "Check health + quota for all accounts"),
                 ("kagitch doctor", "System diagnostics"),
                 ("kagitch update", "Pull latest version from git"),
+                ("", ""),
+                ("", ""),
+                ("", ""),
+                ("", ""),
             ]),
         },
         "right": {
