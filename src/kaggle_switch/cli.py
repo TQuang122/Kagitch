@@ -166,6 +166,7 @@ def render_help() -> None:
 
 
 def cmd_list(config: dict) -> int:
+    _render_banner()
     active = current_active(config)
     accounts = get_accounts(config)
     if not accounts:
