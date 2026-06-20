@@ -324,14 +324,20 @@ def cmd_switch(config: dict, key: str) -> int:
         else:
             console.print(err(f"No accounts configured — use [bold]kagitch add <name>[/]"))
         return 1
+    env_lines = []
     if acc.is_default:
-        print("unset KAGGLE_CONFIG_DIR")
+        env_lines.append("unset KAGGLE_CONFIG_DIR")
     else:
-        print(f"export KAGGLE_CONFIG_DIR={acc.path}")
+        env_lines.append(f"export KAGGLE_CONFIG_DIR={acc.path}")
     if acc.api_token:
-        print(f"export KAGGLE_API_TOKEN={acc.api_token}")
+        env_lines.append(f"export KAGGLE_API_TOKEN={acc.api_token}")
     else:
-        print("unset KAGGLE_API_TOKEN")
+        env_lines.append("unset KAGGLE_API_TOKEN")
+
+    machine_mode = os.environ.get("KAGITCH_SHELL_WRAPPER") == "1"
+    if machine_mode:
+        for line in env_lines:
+            print(line)
 
     # OAuth accounts: copy credentials.json to ~/.kaggle/ since KAGGLE_CONFIG_DIR
     # does not redirect it.
@@ -344,7 +350,6 @@ def cmd_switch(config: dict, key: str) -> int:
             if sys.platform != "win32":
                 creds_dst.chmod(0o600)
 
-    # Visual card — shell function passes through non-export lines
     am = _auth_method(acc.path)
     am_display = _render_auth(am)
     arrow = "\u25b6"
@@ -353,7 +358,8 @@ def cmd_switch(config: dict, key: str) -> int:
         "",
         f"  [{C_INFO}]{arrow}[/]  {acc.path}",
     ]
-    console.print(card(lines, title=f"#{acc.number} Switched"))
+    if not machine_mode:
+        console.print(card(lines, title=f"#{acc.number} Switched"))
 
     username = _active_username_from_account(acc)
     if username:
@@ -376,6 +382,11 @@ def cmd_switch_prompt(config: dict) -> int:
 
     choice = Prompt.ask("Select account", default=active or accounts[0].number)
     console.print()
+    if find_account(config, choice) is None:
+        pairs = ", ".join(f"{a.number} ({a.name})" for a in accounts)
+        console.print(err(f"Invalid account: {choice}"))
+        console.print(f"  Available: {pairs}")
+        return 1
     return cmd_switch(config, choice)
 
 

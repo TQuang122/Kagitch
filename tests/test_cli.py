@@ -149,7 +149,23 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("2", capsys=capsys)
         assert rc == 0
+        assert "Switched" in out
+        assert "beta" in out
+        assert "export KAGGLE_CONFIG_DIR=" not in out
+        assert "unset KAGGLE_API_TOKEN" not in out
+
+    def test_switch_wrapper_mode_emits_env_lines(self, temp_env, capsys, monkeypatch):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}, "2": {"name": "beta", "config_dir": "beta"}}
+        cfg.save_config(config)
+        monkeypatch.setenv("KAGITCH_SHELL_WRAPPER", "1")
+
+        rc, out = run_cli("2", capsys=capsys)
+
+        assert rc == 0
         assert "export KAGGLE_CONFIG_DIR=" in out
+        assert "unset KAGGLE_API_TOKEN" in out
+        assert "Switched" not in out
 
     def test_switch_default_account(self, temp_env, capsys):
         config = cfg.load_config()
@@ -157,7 +173,8 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("1", capsys=capsys)
         assert rc == 0
-        assert "unset KAGGLE_CONFIG_DIR" in out
+        assert "Switched" in out
+        assert "unset KAGGLE_CONFIG_DIR" not in out
 
     def test_switch_not_found(self, temp_env, capsys):
         config = cfg.load_config()
@@ -173,7 +190,8 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("switch", "2", capsys=capsys)
         assert rc == 0
-        assert "export KAGGLE_CONFIG_DIR=" in out
+        assert "Switched" in out
+        assert "export KAGGLE_CONFIG_DIR=" not in out
 
     def test_switch_without_arg_prompts_for_account(self, temp_env, capsys, monkeypatch):
         import io
@@ -191,7 +209,26 @@ class TestSwitch:
         assert rc == 0
         assert "Select account" in out
         assert "beta" in out
-        assert "export KAGGLE_CONFIG_DIR=" in out
+        assert "Switched" in out
+        assert "export KAGGLE_CONFIG_DIR=" not in out
+
+    def test_switch_without_arg_rejects_invalid_choice(self, temp_env, capsys, monkeypatch):
+        import io
+
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "alpha", "config_dir": ""},
+            "2": {"name": "beta", "config_dir": "beta"},
+        }
+        cfg.save_config(config)
+        monkeypatch.setattr("sys.stdin", io.StringIO("99\n"))
+
+        rc, out = run_cli("switch", capsys=capsys)
+
+        assert rc == 1
+        assert "Invalid account" in out
+        assert "Available" in out
+        assert "Traceback" not in out
 
     def test_switch_to_oauth_copies_credentials_json(self, temp_env, capsys):
         tmp_path, _ = temp_env
@@ -222,7 +259,8 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("1", capsys=capsys)
         assert rc == 0
-        assert "export" in out or "unset" in out
+        assert "Switched" in out
+        assert "Traceback" not in out
 
 
 class TestAdd:

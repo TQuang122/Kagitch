@@ -127,7 +127,17 @@ _KNOWN_CMDS_STR = _build_cmds_str()
 _POWERSHELL_FUNCTION = """\
 function Invoke-Kagitch {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
-    $output = & "kagitch.exe" @Arguments 2>&1 | Out-String -Stream
+    $previousWrapper = $env:KAGITCH_SHELL_WRAPPER
+    $env:KAGITCH_SHELL_WRAPPER = "1"
+    try {
+        $output = & "kagitch.exe" @Arguments 2>&1 | Out-String -Stream
+    } finally {
+        if ($null -eq $previousWrapper) {
+            Remove-Item Env:\\KAGITCH_SHELL_WRAPPER -ErrorAction SilentlyContinue
+        } else {
+            $env:KAGITCH_SHELL_WRAPPER = $previousWrapper
+        }
+    }
     foreach ($line in $output) {
         if ($line -match '^export KAGGLE_CONFIG_DIR=(.*)') {
             $env:KAGGLE_CONFIG_DIR = $matches[1]
@@ -149,16 +159,31 @@ Set-Alias -Name kagitch -Value Invoke-Kagitch -Scope Global -Option AllScope
 _ZSH_BASH_FUNCTION = f"""\
 kagitch() {{
   if [[ $# -eq 0 ]]; then
-    command kagitch list
+    command kagitch
     return
   fi
 
   local known_cmds=" {_KNOWN_CMDS_STR} "
   if [[ "$known_cmds" =~ " $1 " ]]; then
-    command kagitch "$@"
+    local out
+    out=$(KAGITCH_SHELL_WRAPPER=1 command kagitch "$@" 2>&1)
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+      echo "$out"
+      return $rc
+    fi
+    while IFS= read -r line; do
+      if [[ "$line" == "unset "* ]]; then
+        eval "$line"
+      elif [[ "$line" == "export "* ]]; then
+        eval "$line"
+      else
+        echo "$line"
+      fi
+    done <<< "$out"
   else
     local out
-    out=$(command kagitch switch "$1" 2>&1)
+    out=$(KAGITCH_SHELL_WRAPPER=1 command kagitch switch "$1" 2>&1)
     local rc=$?
     if [[ $rc -ne 0 ]]; then
       echo "$out"
@@ -180,15 +205,34 @@ kagitch() {{
 _FISH_FUNCTION = f"""\
 function kagitch
   if test (count $argv) -eq 0
-    command kagitch list
+    command kagitch
     return
   end
 
   set -l known_cmds {_KNOWN_CMDS_STR}
   if contains -- $argv[1] $known_cmds
-    command kagitch $argv
+    set out (env KAGITCH_SHELL_WRAPPER=1 command kagitch $argv 2>&1)
+    set rc $status
+    if test $rc -ne 0
+      echo "$out"
+      return $rc
+    end
+    echo "$out" | while read -l line
+      switch "$line"
+        case "unset KAGGLE_CONFIG_DIR"
+          set -e KAGGLE_CONFIG_DIR
+        case "export KAGGLE_CONFIG_DIR="*
+          set -gx KAGGLE_CONFIG_DIR (string split -m1 "=" -- "$line")[2]
+        case "unset KAGGLE_API_TOKEN"
+          set -e KAGGLE_API_TOKEN
+        case "export KAGGLE_API_TOKEN="*
+          set -gx KAGGLE_API_TOKEN (string split -m1 "=" -- "$line")[2]
+        case '*'
+          echo "$line"
+      end
+    end
   else
-    set out (command kagitch switch $argv[1] 2>&1)
+    set out (env KAGITCH_SHELL_WRAPPER=1 command kagitch switch $argv[1] 2>&1)
     set rc $status
     if test $rc -ne 0
       echo "$out"
