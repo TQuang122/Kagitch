@@ -90,14 +90,13 @@ class TestCheckAccount:
 
     def test_kaggle_not_installed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.checker.shutil.which", lambda _: None)
         acc = Account(number="4", name="nokaggle", config_dir="nokaggle")
 
-        with patch("kaggle_switch.checker._run_kaggle") as mock:
-            mock.side_effect = FileNotFoundError("kaggle not found")
-            result = check_account(acc)
+        result = check_account(acc)
 
         assert result.quota_ok is False
-        assert "kaggle not found" in result.quota_error
+        assert "kaggle CLI not found on PATH" in result.quota_error
 
     def test_token_account_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))

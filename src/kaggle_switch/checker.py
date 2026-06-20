@@ -106,10 +106,27 @@ def _run_kaggle(cmd: list[str], env: dict[str, str], timeout: int = 15) -> subpr
     return subprocess.run(["kaggle"] + cmd, **kwargs)
 
 
+def _require_kaggle() -> str | None:
+    """Return an error string if `kaggle` CLI is not on PATH."""
+    if shutil.which("kaggle"):
+        return None
+    return (
+        "kaggle CLI not found on PATH.\n"
+        "  Install with:  pip install kaggle"
+    )
+
+
 def check_account(acc: Account) -> CheckResult:
     """Run full check on a single account."""
     result = CheckResult(number=acc.number, name=acc.name, config_path=acc.path)
     env = _build_env(acc)
+
+    # ── Phase 0: kaggle CLI availability ──────────────────────────
+    missing = _require_kaggle()
+    if missing:
+        result.quota_error = missing
+        result.file_error = missing
+        return result
 
     # ── Phase 1: file check ──────────────────────────────────────
     json_file = acc.path / "kaggle.json"

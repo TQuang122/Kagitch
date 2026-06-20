@@ -114,6 +114,7 @@ def render_help() -> None:
             "Health": ("\U0001f50d", [
                 ("kagitch check", "Check health + quota for all accounts"),
                 ("kagitch doctor", "System diagnostics"),
+                ("kagitch update", "Pull latest version from git"),
             ]),
         },
         "right": {
@@ -808,6 +809,41 @@ def cmd_list_accounts(config: dict) -> int:
     return 0
 
 
+def cmd_update() -> int:
+    """Pull the latest version from git."""
+    pkg_dir = Path(__file__).resolve().parent  # src/kaggle_switch/
+    root = pkg_dir.parent.parent  # project root
+
+    git_dir = root / ".git"
+    if not git_dir.is_dir():
+        console.print(err("Not a git installation (installed via pip?)."))
+        console.print(info("Re-install with:"))
+        console.print("  [green]pip install --upgrade git+https://github.com/TQuang122/Kagitch.git[/]")
+        return 1
+
+    with console.status("[bold green]Pulling latest version...") as _:
+        cp = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            capture_output=True, text=True,
+            cwd=root,
+        )
+
+    if cp.returncode != 0:
+        console.print(err("Update failed:"))
+        console.print(f"  [dim]{cp.stderr.strip()}[/]")
+        return 1
+
+    if "Already up to date" in cp.stdout:
+        console.print(ok("Already up to date."))
+        return 0
+
+    console.print(ok(f"Updated to latest commit."))
+    if cp.stdout.strip():
+        for line in cp.stdout.strip().splitlines():
+            console.print(f"  [dim]{line}[/]")
+    return 0
+
+
 def main() -> int:
     try:
         return _main()
@@ -869,6 +905,9 @@ def _main() -> int:
 
     if cmd == "check":
         return cmd_check(config)
+
+    if cmd == "update":
+        return cmd_update()
 
     if cmd == "patch":
         return cmd_patch(config, rest)
