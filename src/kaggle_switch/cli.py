@@ -341,14 +341,16 @@ def cmd_switch(config: dict, key: str) -> int:
 
     # OAuth accounts: copy credentials.json to ~/.kaggle/ since KAGGLE_CONFIG_DIR
     # does not redirect it.
+    creds_dst = Path.home() / ".kaggle" / "credentials.json"
     if acc.auth_type == "oauth":
         creds_src = acc.path / "credentials.json"
         if creds_src.exists():
-            creds_dst = Path.home() / ".kaggle" / "credentials.json"
             creds_dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(creds_src, creds_dst)
             if sys.platform != "win32":
                 creds_dst.chmod(0o600)
+    elif creds_dst.exists():
+        creds_dst.unlink()
 
     am = _auth_method(acc.path)
     am_display = _render_auth(am)
@@ -382,7 +384,12 @@ def cmd_switch_prompt(config: dict) -> int:
         marker = " [active]" if acc.number == active else ""
         console.print(f"  {acc.number}. {acc.name}{marker}")
 
-    choice = Prompt.ask("Select account", default=active or accounts[0].number)
+    try:
+        choice = Prompt.ask("Select account", default=active or accounts[0].number)
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+        console.print(info("Cancelled."))
+        return 1
     console.print()
     if find_account(config, choice) is None:
         pairs = ", ".join(f"{a.number} ({a.name})" for a in accounts)
@@ -732,8 +739,6 @@ def cmd_init(args: list[str] | None = None) -> int:
 
 
 def _reload(shell: str) -> None:
-    import os
-
     if shell == "powershell":
         ps_profile = rc_file_for_shell("powershell")
         if ps_profile:
@@ -742,11 +747,11 @@ def _reload(shell: str) -> None:
             console.print("  Restart your PowerShell session.")
         return
 
-    shell_path = os.environ.get("SHELL", "")
-    if shell_path:
-        console.print(f"  Reloading {shell}...")
-        os.execv(shell_path, [shell_path, "-l"])
-    console.print("  Restart your shell to activate.")
+    rc = rc_file_for_shell(shell)
+    if rc:
+        console.print(f"  Run: [bold]source {rc}[/]")
+    else:
+        console.print("  Restart your shell to activate.")
 
 
 def cmd_check(config: dict) -> int:
