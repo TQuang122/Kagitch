@@ -358,7 +358,9 @@ def cmd_switch(config: dict, key: str) -> int:
         "",
         f"  [{C_INFO}]{arrow}[/]  {acc.path}",
     ]
-    if not machine_mode:
+    if machine_mode:
+        print(f"  Switched to #{acc.number}: {acc.name}", file=sys.stderr)
+    else:
         console.print(card(lines, title=f"#{acc.number} Switched"))
 
     username = _active_username_from_account(acc)
@@ -1036,7 +1038,6 @@ def _main() -> int:
         return cmd_switch(config, rest[0])
 
     if cmd in ("add", "login"):
-        return cmd_add(config, rest)
         return cmd_add(config, rest)
 
     if cmd in ("remove", "rm"):
