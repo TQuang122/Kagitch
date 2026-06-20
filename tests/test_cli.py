@@ -297,7 +297,7 @@ class TestAliases:
         for alias in ("-v", "version"):
             rc, out = run_cli(alias, capsys=capsys)
             assert rc == 0
-            assert "v1.0.0" in out
+            assert "v1.1.0" in out
 
     def test_list_alias(self, temp_env, capsys):
         config = cfg.load_config()
@@ -351,7 +351,7 @@ class TestVersion:
     def test_version_flag(self, temp_env, capsys):
         rc, out = run_cli("--version", capsys=capsys)
         assert rc == 0
-        assert "v1.0.0" in out
+        assert "v1.1.0" in out
 
 
 class TestHelp:

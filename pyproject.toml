@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kagitch"
-version = "1.0.0"
+version = "1.1.0"
 description = "Kaggle multi-account manager — switch between Kaggle accounts with one command."
 readme = "README.md"
 license = "MIT"
