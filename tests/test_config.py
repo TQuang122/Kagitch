@@ -1,6 +1,7 @@
 """Tests for config module."""
 import json
 import os
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,8 +13,8 @@ from kaggle_switch import config as cfg
 @pytest.fixture
 def temp_config(tmp_path, monkeypatch):
     """Patch config paths to use temp directory."""
-    monkeypatch.setattr(cfg, "CONFIG_DIR", tmp_path / ".config" / "kaggle-switch")
-    monkeypatch.setattr(cfg, "CONFIG_FILE", tmp_path / ".config" / "kaggle-switch" / "accounts.json")
+    monkeypatch.setattr(cfg, "CONFIG_DIR", tmp_path / ".config" / "kagitch")
+    monkeypatch.setattr(cfg, "CONFIG_FILE", tmp_path / ".config" / "kagitch" / "accounts.json")
     monkeypatch.setattr(cfg, "KAGGLE_DEFAULT", tmp_path / ".kaggle")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     return tmp_path
@@ -116,7 +117,31 @@ class TestAddAccount:
         assert acc.config_dir == "testuser"
         target = temp_config / ".kaggle-testuser" / "kaggle.json"
         assert target.exists()
-        assert oct(target.stat().st_mode)[-3:] == "600"
+        if sys.platform != "win32":
+            assert oct(target.stat().st_mode)[-3:] == "600"
+
+    def test_add_with_token_string(self, temp_config):
+        config = {"accounts": {}}
+        acc = cfg.add_account(config, "tokenuser", "KGAT_7b42f4050e6bed91ef395d02a0b3dc6d")
+        assert acc.number == "1"
+        assert acc.name == "tokenuser"
+        target = temp_config / ".kaggle-tokenuser" / "access_token"
+        assert target.exists()
+        content = target.read_text().strip()
+        assert content == "KGAT_7b42f4050e6bed91ef395d02a0b3dc6d"
+        if sys.platform != "win32":
+            assert oct(target.stat().st_mode)[-3:] == "600"
+
+    def test_add_with_access_token_file(self, temp_config, tmp_path):
+        token_file = tmp_path / "access_token"
+        token_file.write_text("KGAT_abc123\n")
+        config = {"accounts": {}}
+        acc = cfg.add_account(config, "fileuser", token_file)
+        assert acc.number == "1"
+        assert acc.name == "fileuser"
+        target = temp_config / ".kaggle-fileuser" / "access_token"
+        assert target.exists()
+        assert target.read_text().strip() == "KGAT_abc123"
 
     def test_add_duplicate_name_raises(self, temp_config):
         config = {"accounts": {"1": {"name": "test", "config_dir": "test"}}}
@@ -141,8 +166,7 @@ class TestRemoveAccount:
         config = {"accounts": {"1": {"name": "a", "config_dir": "a"}, "2": {"name": "b", "config_dir": "b"}}}
         acc = cfg.remove_account(config, "1")
         assert acc.name == "a"
-        assert "1" not in config["accounts"]
-        assert "2" in config["accounts"]
+        assert config["accounts"] == {"1": {"name": "b", "config_dir": "b"}}
 
     def test_remove_by_name(self, temp_config):
         config = {"accounts": {"1": {"name": "alpha", "config_dir": "alpha"}}}
@@ -169,14 +193,28 @@ class TestRenameAccount:
             cfg.rename_account(config, "99", "new")
 
 
-class TestSwitchMarker:
-    def test_default_account_marker(self, temp_config):
-        acc = cfg.Account(number="1", name="default", config_dir="")
-        assert cfg.switch_marker(acc) == "__KAGGLE_SWITCH__"
+class TestAuthType:
+    def test_get_accounts_includes_auth_type(self, temp_config):
+        config = {"accounts": {"1": {"name": "oauthuser", "config_dir": "oauthuser", "auth_type": "oauth"}}}
+        accounts = cfg.get_accounts(config)
+        assert accounts[0].auth_type == "oauth"
 
-    def test_non_default_marker_includes_path(self, temp_config):
-        acc = cfg.Account(number="2", name="alt", config_dir="alt")
-        marker = cfg.switch_marker(acc)
-        assert marker.startswith("__KAGGLE_SWITCH__")
-        assert marker != "__KAGGLE_SWITCH__"
-        assert "alt" in marker
+    def test_find_account_includes_auth_type(self, temp_config):
+        config = {"accounts": {"1": {"name": "oauthuser", "config_dir": "oauthuser", "auth_type": "oauth"}}}
+        acc = cfg.find_account(config, "1")
+        assert acc is not None
+        assert acc.auth_type == "oauth"
+
+    def test_add_account_stores_auth_type(self, temp_config, tmp_path):
+        json_file = tmp_path / "kaggle.json"
+        json_file.write_text('{"username":"test","key":"abc"}')
+        config = {"accounts": {}}
+        acc = cfg.add_account(config, "oauthuser", json_file, auth_type="oauth")
+        assert acc.auth_type == "oauth"
+        assert config["accounts"]["1"]["auth_type"] == "oauth"
+
+    def test_default_auth_type_empty(self, temp_config):
+        config = {"accounts": {"1": {"name": "plain", "config_dir": "plain"}}}
+        acc = cfg.get_accounts(config)[0]
+        assert acc.auth_type == ""
+

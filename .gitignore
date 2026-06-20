@@ -17,3 +17,5 @@ env/
 htmlcov/
 *.egg
 pip-wheel-metadata/
+.githooks/
+uv.lock

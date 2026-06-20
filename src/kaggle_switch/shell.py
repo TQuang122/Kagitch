@@ -1,58 +1,94 @@
 """Shell integration function generation."""
 from __future__ import annotations
+import sys
 from pathlib import Path
 
-SUPPORTED_SHELLS = ("zsh", "bash", "fish")
+SUPPORTED_SHELLS = ("zsh", "bash", "fish", "powershell")
+
+_POWERSHELL_FUNCTION = """\
+function Invoke-Kagitch {
+    param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+    $output = & "kagitch.exe" @Arguments 2>&1 | Out-String -Stream
+    foreach ($line in $output) {
+        if ($line -match '^export KAGGLE_CONFIG_DIR=(.*)') {
+            $env:KAGGLE_CONFIG_DIR = $matches[1]
+        } elseif ($line -match '^unset KAGGLE_CONFIG_DIR') {
+            Remove-Item Env:\\KAGGLE_CONFIG_DIR -ErrorAction SilentlyContinue
+        } elseif ($line -match '^export KAGGLE_API_TOKEN=(.*)') {
+            $env:KAGGLE_API_TOKEN = $matches[1]
+        } elseif ($line -match '^unset KAGGLE_API_TOKEN') {
+            Remove-Item Env:\\KAGGLE_API_TOKEN -ErrorAction SilentlyContinue
+        } else {
+            Write-Output $line
+        }
+    }
+}
+
+Set-Alias -Name kagitch -Value Invoke-Kagitch -Scope Global -Option AllScope
+"""
 
 _ZSH_BASH_FUNCTION = """\
-kaggle-switch() {
+kagitch() {
   if [[ $# -eq 0 ]]; then
-    command kaggle-switch list
+    command kagitch list
     return
   fi
 
-  if [[ "$1" =~ ^[0-9]+$ ]]; then
+  local known_cmds=" list current switch add remove rename patch shellpath init check doctor completions --help --version "
+  if [[ "$known_cmds" =~ " $1 " ]]; then
+    command kagitch "$@"
+  else
     local out
-    out=$(command kaggle-switch switch "$1" 2>&1)
+    out=$(command kagitch switch "$1" 2>&1)
     local rc=$?
-    if [[ "$out" == "__KAGGLE_SWITCH__" ]]; then
-      unset KAGGLE_CONFIG_DIR
-      echo "Switched to account $1"
-    elif [[ "$out" == __KAGGLE_SWITCH__* ]]; then
-      export KAGGLE_CONFIG_DIR="${out#__KAGGLE_SWITCH__}"
-      echo "Switched to account $1"
-    else
+    if [[ $rc -ne 0 ]]; then
       echo "$out"
       return $rc
     fi
-  else
-    command kaggle-switch "$@"
+    while IFS= read -r line; do
+      if [[ "$line" == "unset "* ]]; then
+        eval "$line"
+      elif [[ "$line" == "export "* ]]; then
+        eval "$line"
+      else
+        echo "$line"
+      fi
+    done <<< "$out"
   fi
 }
 """
 
 _FISH_FUNCTION = """\
-function kaggle-switch
+function kagitch
   if test (count $argv) -eq 0
-    command kaggle-switch list
+    command kagitch list
     return
   end
 
-  if string match -qr '^[0-9]+$' -- $argv[1]
-    set out (command kaggle-switch switch $argv[1] 2>&1)
+  set -l known_cmds list current switch add remove rename patch shellpath init check doctor completions --help --version
+  if contains -- $argv[1] $known_cmds
+    command kagitch $argv
+  else
+    set out (command kagitch switch $argv[1] 2>&1)
     set rc $status
-    if test "$out" = "__KAGGLE_SWITCH__"
-      set -e KAGGLE_CONFIG_DIR
-      echo "Switched to account $argv[1]"
-    else if string match -q "__KAGGLE_SWITCH__*" -- $out
-      set -gx KAGGLE_CONFIG_DIR (string replace "__KAGGLE_SWITCH__" "" -- $out)
-      echo "Switched to account $argv[1]"
-    else
+    if test $rc -ne 0
       echo "$out"
       return $rc
     end
-  else
-    command kaggle-switch $argv
+    echo "$out" | while read -l line
+      switch "$line"
+        case "unset KAGGLE_CONFIG_DIR"
+          set -e KAGGLE_CONFIG_DIR
+        case "export KAGGLE_CONFIG_DIR="*
+          set -gx KAGGLE_CONFIG_DIR (string split -m1 "=" -- "$line")[2]
+        case "unset KAGGLE_API_TOKEN"
+          set -e KAGGLE_API_TOKEN
+        case "export KAGGLE_API_TOKEN="*
+          set -gx KAGGLE_API_TOKEN (string split -m1 "=" -- "$line")[2]
+        case '*'
+          echo "$line"
+      end
+    end
   end
 end
 """
@@ -64,13 +100,14 @@ def shellpath(shell: str) -> str:
         return _ZSH_BASH_FUNCTION
     if shell == "fish":
         return _FISH_FUNCTION
+    if shell == "powershell":
+        return _POWERSHELL_FUNCTION
     raise ValueError(f"Unsupported shell: {shell!r}. Supported: {', '.join(SUPPORTED_SHELLS)}")
 
 
 def detect_shell() -> str:
-    """Detect the current shell from SHELL env var."""
-    import os
-    shell_path = os.environ.get("SHELL", "")
+    """Detect the current shell from SHELL env var or platform."""
+    shell_path = __import__("os").environ.get("SHELL", "")
     name = Path(shell_path).name.lower() if shell_path else ""
     if "zsh" in name:
         return "zsh"
@@ -78,7 +115,12 @@ def detect_shell() -> str:
         return "bash"
     if "fish" in name:
         return "fish"
-    return "zsh"  # default
+    if "pwsh" in name or "powershell" in name:
+        return "powershell"
+    # On Windows with no SHELL set, default to PowerShell
+    if sys.platform == "win32":
+        return "powershell"
+    return "zsh"
 
 
 def rc_file_for_shell(shell: str) -> Path | None:
@@ -90,11 +132,156 @@ def rc_file_for_shell(shell: str) -> Path | None:
         return home / ".bashrc"
     if shell == "fish":
         return home / ".config" / "fish" / "config.fish"
+    if shell == "powershell":
+        if sys.platform == "win32":
+            return home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
+        return home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"
     return None
 
 
 def eval_line_for_shell(shell: str) -> str:
     """Return the eval line to add to rc file."""
     if shell == "fish":
-        return 'kaggle-switch shellpath fish | source'
-    return 'eval "$(kaggle-switch shellpath zsh)"'
+        return 'kagitch shellpath fish | source'
+    if shell == "powershell":
+        return 'kagitch shellpath powershell | Out-String | Invoke-Expression'
+    return 'eval "$(kagitch shellpath zsh)"'
+
+
+# ── Shell completion generators ───────────────────────────────
+
+_ZSH_COMPLETION = """\
+#compdef kagitch
+# kagitch shell completion — do not edit manually
+
+__kagitch_accounts() {
+  local -a accounts
+  while IFS=: read -r num name; do
+    accounts+=("$num:$name")
+  done < <(command kagitch __list_accounts 2>/dev/null)
+  _describe 'account' accounts
+}
+
+__kagitch_commands() {
+  local -a commands
+  commands=(
+    'list:List all accounts'
+    'current:Show active account'
+    'switch:Switch to account N'
+    'add:Register a new account'
+    'remove:Remove an account'
+    'rename:Rename an account'
+    'patch:Patch kernel-metadata.json id'
+    'shellpath:Print shell function'
+    'init:Auto-install shell integration'
+    'check:Check account health and quota'
+    'doctor:System diagnostics'
+    'completions:Generate shell completion'
+  )
+  _describe 'command' commands
+}
+
+_kagitch() {
+  local curcontext="$curcontext" state state_descs line
+  typeset -A opt_args
+
+  _arguments -C \\
+    '--version[Show version]' \\
+    '--help[Show help]' \\
+    '1: :->cmd_or_num' \\
+    '*:: :->args'
+
+  case $state in
+    cmd_or_num)
+      _alternative \\
+        'accounts:account:__kagitch_accounts' \\
+        'commands:command:__kagitch_commands'
+      ;;
+  esac
+}
+
+_kagitch "$@"
+"""
+
+_BASH_COMPLETION = """\
+# kagitch shell completion — source this file or add to your .bashrc
+
+_kagitch_completions() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local cmds="list current switch add remove rename patch shellpath init check doctor completions --help --version"
+
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    local -a accounts
+    while IFS=: read -r num name; do
+      accounts+=("$num" "$name")
+    done < <(command kagitch __list_accounts 2>/dev/null)
+    COMPREPLY=($(compgen -W "$cmds ${accounts[*]}" -- "$cur"))
+  fi
+}
+
+complete -F _kagitch_completions kagitch
+"""
+
+_FISH_COMPLETION = """\
+# kagitch shell completion — do not edit manually
+
+complete -c kagitch -f -n __fish_use_subcommand -a list -d "List all accounts"
+complete -c kagitch -f -n __fish_use_subcommand -a current -d "Show active account"
+complete -c kagitch -f -n __fish_use_subcommand -a switch -d "Switch to account N"
+complete -c kagitch -f -n __fish_use_subcommand -a add -d "Register a new account"
+complete -c kagitch -f -n __fish_use_subcommand -a remove -d "Remove an account"
+complete -c kagitch -f -n __fish_use_subcommand -a rename -d "Rename an account"\ncomplete -c kagitch -f -n __fish_use_subcommand -a patch -d "Patch kernel-metadata.json id"\ncomplete -c kagitch -f -n __fish_use_subcommand -a shellpath -d "Print shell function"
+complete -c kagitch -f -n __fish_use_subcommand -a init -d "Auto-install shell integration"
+complete -c kagitch -f -n __fish_use_subcommand -a check -d "Check account health and quota"
+complete -c kagitch -f -n __fish_use_subcommand -a doctor -d "System diagnostics"
+complete -c kagitch -f -n __fish_use_subcommand -a completions -d "Generate shell completion"
+complete -c kagitch -f -n __fish_use_subcommand -l version -d "Show version"
+complete -c kagitch -f -n __fish_use_subcommand -l help -d "Show help"
+
+# Dynamic account completions for first argument
+complete -c kagitch -f -n __fish_use_subcommand -a "(command kagitch __list_accounts 2>/dev/null | string replace : \\t)"
+"""
+
+_POWERSHELL_COMPLETION = """\
+# kagitch PowerShell completion — add to your $PROFILE
+
+Register-ArgumentCompleter -Native -CommandName kagitch -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $commands = @(
+        [System.Management.Automation.CompletionResult]::new('list', 'list', [System.Management.Automation.CompletionResultType]::ParameterValue, 'List all accounts')
+        [System.Management.Automation.CompletionResult]::new('current', 'current', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Show active account')
+        [System.Management.Automation.CompletionResult]::new('switch', 'switch', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Switch to account N')
+        [System.Management.Automation.CompletionResult]::new('add', 'add', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Register a new account')
+        [System.Management.Automation.CompletionResult]::new('remove', 'remove', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Remove an account')
+        [System.Management.Automation.CompletionResult]::new('rename', 'rename', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Rename an account')\n        [System.Management.Automation.CompletionResult]::new('patch', 'patch', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Patch kernel-metadata.json id')\n        [System.Management.Automation.CompletionResult]::new('shellpath', 'shellpath', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Print shell function')
+        [System.Management.Automation.CompletionResult]::new('init', 'init', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Auto-install shell integration')
+        [System.Management.Automation.CompletionResult]::new('check', 'check', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Check account health and quota')
+        [System.Management.Automation.CompletionResult]::new('doctor', 'doctor', [System.Management.Automation.CompletionResultType]::ParameterValue, 'System diagnostics')
+        [System.Management.Automation.CompletionResult]::new('completions', 'completions', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Generate shell completion')
+    )
+
+    # Dynamic account completions
+    $accounts = & "kagitch.exe" __list_accounts 2>&1 | ForEach-Object {
+        $num, $name = $_ -split ':'
+        [System.Management.Automation.CompletionResult]::new($num, "$num ($name)", [System.Management.Automation.CompletionResultType]::ParameterValue, $name)
+    }
+
+    $commands + $accounts | Where-Object {
+        $_.CompletionText -like "$wordToComplete*" -or $_.ListItemText -like "$wordToComplete*"
+    }
+}
+"""
+
+
+def completions(shell: str) -> str:
+    """Return shell completion script for the given shell."""
+    if shell == "zsh":
+        return _ZSH_COMPLETION
+    if shell == "bash":
+        return _BASH_COMPLETION
+    if shell == "fish":
+        return _FISH_COMPLETION
+    if shell == "powershell":
+        return _POWERSHELL_COMPLETION
+    raise ValueError(f"Unsupported shell: {shell!r}. Supported: {', '.join(SUPPORTED_SHELLS)}")

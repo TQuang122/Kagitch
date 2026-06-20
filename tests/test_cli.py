@@ -13,19 +13,19 @@ from kaggle_switch import config as cfg
 @pytest.fixture
 def temp_env(tmp_path, monkeypatch):
     """Patch all path dependencies to temp directory."""
-    monkeypatch.setattr(cfg, "CONFIG_DIR", tmp_path / ".config" / "kaggle-switch")
-    monkeypatch.setattr(cfg, "CONFIG_FILE", tmp_path / ".config" / "kaggle-switch" / "accounts.json")
+    monkeypatch.setattr(cfg, "CONFIG_DIR", tmp_path / ".config" / "kagitch")
+    monkeypatch.setattr(cfg, "CONFIG_FILE", tmp_path / ".config" / "kagitch" / "accounts.json")
     monkeypatch.setattr(cfg, "KAGGLE_DEFAULT", tmp_path / ".kaggle")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     # Create a fake kaggle.json for add tests
-    kaggle_json = tmp_path / "fake_kaggle.json"
+    kaggle_json = tmp_path / "kaggle.json"
     kaggle_json.write_text('{"username":"test","key":"abc123"}')
     return tmp_path, kaggle_json
 
 
 def run_cli(*args, capsys) -> tuple[int, str]:
     """Run CLI with args, return (returncode, stdout)."""
-    with patch.object(sys, "argv", ["kaggle-switch"] + list(args)):
+    with patch.object(sys, "argv", ["kagitch"] + list(args)):
         rc = cli.main()
     captured = capsys.readouterr()
     return rc, captured.out + captured.err
@@ -63,6 +63,65 @@ class TestCurrent:
         assert "alpha" in out
 
 
+class TestLogin:
+    def test_login_missing_name(self, temp_env, capsys):
+        rc, out = run_cli("login", capsys=capsys)
+        assert rc == 1
+        assert "Usage" in out
+
+    def test_login_duplicate_name(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "existing", "config_dir": "existing"}}
+        cfg.save_config(config)
+        rc, out = run_cli("login", "existing", capsys=capsys)
+        assert rc == 1
+        assert "already exists" in out
+
+    def test_login_oauth_success(self, temp_env, capsys, monkeypatch):
+        tmp_path, _ = temp_env
+
+        class MockCreds:
+            def get_username(self):
+                return "kaggleuser"
+
+        class MockOAuth:
+            def authenticate(self, **kw):
+                return MockCreds()
+
+        monkeypatch.setattr("kagglesdk.kaggle_client.KaggleClient", object)
+        monkeypatch.setattr("kagglesdk.kaggle_oauth.KaggleOAuth", lambda client: MockOAuth())
+
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(parents=True, exist_ok=True)
+        (kaggle_dir / "credentials.json").write_text('{"refresh_token": "rt1"}')
+
+        rc, out = run_cli("login", "oauthuser", capsys=capsys)
+        assert rc == 0
+        assert "oauthuser" in out
+        assert "kaggleuser" in out
+
+        config = cfg.load_config()
+        assert "1" in config["accounts"]
+        assert config["accounts"]["1"]["auth_type"] == "oauth"
+        assert config["accounts"]["1"]["name"] == "oauthuser"
+
+        target = tmp_path / ".kaggle-oauthuser" / "credentials.json"
+        assert target.exists()
+
+    def test_login_oauth_failure(self, temp_env, capsys, monkeypatch):
+        monkeypatch.setattr("kagglesdk.kaggle_client.KaggleClient", object)
+
+        class FailingOAuth:
+            def authenticate(self, **kw):
+                raise Exception("Login failed")
+
+        monkeypatch.setattr("kagglesdk.kaggle_oauth.KaggleOAuth", lambda client: FailingOAuth())
+
+        rc, out = run_cli("login", "failuser", capsys=capsys)
+        assert rc == 1
+        assert "failed" in out.lower()
+
+
 class TestSwitch:
     def test_switch_existing(self, temp_env, capsys):
         config = cfg.load_config()
@@ -70,7 +129,7 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("2", capsys=capsys)
         assert rc == 0
-        assert "__KAGGLE_SWITCH__" in out
+        assert "export KAGGLE_CONFIG_DIR=" in out
 
     def test_switch_default_account(self, temp_env, capsys):
         config = cfg.load_config()
@@ -78,7 +137,7 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("1", capsys=capsys)
         assert rc == 0
-        assert out.strip() == "__KAGGLE_SWITCH__"
+        assert "unset KAGGLE_CONFIG_DIR" in out
 
     def test_switch_not_found(self, temp_env, capsys):
         config = cfg.load_config()
@@ -94,7 +153,38 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("switch", "2", capsys=capsys)
         assert rc == 0
-        assert "__KAGGLE_SWITCH__" in out
+        assert "export KAGGLE_CONFIG_DIR=" in out
+
+    def test_switch_to_oauth_copies_credentials_json(self, temp_env, capsys):
+        tmp_path, _ = temp_env
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "legacy", "config_dir": ""},
+            "2": {"name": "myoauth", "config_dir": "myoauth", "auth_type": "oauth"},
+        }
+        cfg.save_config(config)
+
+        oauth_dir = tmp_path / ".kaggle-myoauth"
+        oauth_dir.mkdir(parents=True, exist_ok=True)
+        (oauth_dir / "credentials.json").write_text('{"refresh_token": "rt1"}')
+
+        rc, out = run_cli("2", capsys=capsys)
+        assert rc == 0
+
+        dest = tmp_path / ".kaggle" / "credentials.json"
+        assert dest.exists()
+        assert "rt1" in dest.read_text()
+
+    def test_switch_to_oauth_without_credentials_file(self, temp_env, capsys):
+        """OAuth switch should not crash if credentials.json is missing."""
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "brokenoauth", "config_dir": "brokenoauth", "auth_type": "oauth"},
+        }
+        cfg.save_config(config)
+        rc, out = run_cli("1", capsys=capsys)
+        assert rc == 0
+        assert "export" in out or "unset" in out
 
 
 class TestAdd:
@@ -104,7 +194,7 @@ class TestAdd:
         assert rc == 0
         assert "Added account #1" in out
         assert "newuser" in out
-        target = tmp_path / ".kaggle-newuser" / "kaggle.json"
+        target = tmp_path / ".kaggle-newuser" / kaggle_json.name
         assert target.exists()
 
     def test_add_duplicate_fails(self, temp_env, capsys):
@@ -120,6 +210,16 @@ class TestAdd:
         rc, out = run_cli("add", "newuser", "/nonexistent/path.json", capsys=capsys)
         assert rc == 1
         assert "not found" in out.lower() or "no such" in out.lower()
+
+    def test_add_with_token(self, temp_env, capsys):
+        tmp_path, _ = temp_env
+        rc, out = run_cli("add", "tokenacc", "KGAT_7b42f4050e6bed91ef395d02a0b3dc6d", capsys=capsys)
+        assert rc == 0
+        assert "Added account #1" in out
+        assert "tokenacc" in out
+        target = tmp_path / ".kaggle-tokenacc" / "access_token"
+        assert target.exists()
+        assert target.read_text().strip() == "KGAT_7b42f4050e6bed91ef395d02a0b3dc6d"
 
 
 class TestRemove:
@@ -152,15 +252,15 @@ class TestShellpath:
     def test_shellpath_zsh(self, temp_env, capsys):
         rc, out = run_cli("shellpath", "zsh", capsys=capsys)
         assert rc == 0
-        assert "kaggle-switch()" in out
+        assert "kagitch()" in out
 
     def test_shellpath_fish(self, temp_env, capsys):
         rc, out = run_cli("shellpath", "fish", capsys=capsys)
         assert rc == 0
-        assert "function kaggle-switch" in out
+        assert "function kagitch" in out
 
     def test_shellpath_invalid(self, temp_env, capsys):
-        rc, out = run_cli("shellpath", "powershell", capsys=capsys)
+        rc, out = run_cli("shellpath", "tcsh", capsys=capsys)
         assert rc == 1
         assert "Unsupported" in out
 
@@ -169,7 +269,7 @@ class TestVersion:
     def test_version_flag(self, temp_env, capsys):
         rc, out = run_cli("--version", capsys=capsys)
         assert rc == 0
-        assert "kaggle-switch" in out
+        assert "kagitch" in out
         assert "1.0.0" in out
 
 
@@ -178,7 +278,7 @@ class TestHelp:
         rc, out = run_cli("--help", capsys=capsys)
         assert rc == 0
         assert "Usage" in out
-        assert "kaggle-switch" in out
+        assert "kagitch" in out
 
 
 class TestUnknownCommand:
@@ -186,3 +286,86 @@ class TestUnknownCommand:
         rc, out = run_cli("foobar", capsys=capsys)
         assert rc == 1
         assert "Unknown command" in out
+
+
+class TestCheck:
+    def test_check_with_accounts(self, temp_env, capsys):
+        """check runs and produces table output."""
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "alpha", "config_dir": "alpha"},
+            "2": {"name": "beta", "config_dir": "beta"},
+        }
+        cfg.save_config(config)
+
+        with patch("kaggle_switch.checker.check_all_accounts") as mock:
+            from kaggle_switch.checker import CheckResult
+            r1 = CheckResult(number="1", name="alpha",
+                             config_path=temp_env[0] / ".kaggle-alpha")
+            r1.file_ok = True
+            r1.auth_match = True
+            r1.quota_ok = True
+            r1.gpu_remaining = "4.13h"
+            r1.tpu_remaining = "20.00h"
+
+            r2 = CheckResult(number="2", name="beta",
+                             config_path=temp_env[0] / ".kaggle-beta")
+            r2.file_ok = False
+            r2.file_error = "missing kaggle.json"
+            r2.quota_ok = False
+
+            mock.return_value = [r1, r2]
+
+            rc, out = run_cli("check", capsys=capsys)
+
+        assert rc == 0
+        assert "alpha" in out
+        assert "beta" in out
+        assert "4.13h" in out
+        assert "\u2717 Failed" in out
+
+    def test_check_no_accounts(self, temp_env, capsys):
+        rc, out = run_cli("check", capsys=capsys)
+        assert rc == 0
+
+
+class TestListAccounts:
+    def test_list_accounts_output(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "first", "config_dir": ""},
+            "2": {"name": "second", "config_dir": "second"},
+        }
+        cfg.save_config(config)
+
+        rc, out = run_cli("__list_accounts", capsys=capsys)
+        assert rc == 0
+        assert "1:first" in out
+        assert "2:second" in out
+
+    def test_list_accounts_empty(self, temp_env, capsys):
+        rc, out = run_cli("__list_accounts", capsys=capsys)
+        assert rc == 0
+        assert out.strip() == ""
+
+
+class TestCompletions:
+    def test_completions_zsh(self, temp_env, capsys):
+        rc, out = run_cli("completions", "zsh", capsys=capsys)
+        assert rc == 0
+        assert "#compdef" in out
+
+    def test_completions_bash(self, temp_env, capsys):
+        rc, out = run_cli("completions", "bash", capsys=capsys)
+        assert rc == 0
+        assert "complete -F" in out
+
+    def test_completions_fish(self, temp_env, capsys):
+        rc, out = run_cli("completions", "fish", capsys=capsys)
+        assert rc == 0
+        assert "complete -c kagitch" in out
+
+    def test_completions_invalid(self, temp_env, capsys):
+        rc, out = run_cli("completions", "tcsh", capsys=capsys)
+        assert rc == 1
+        assert "Unsupported" in out
