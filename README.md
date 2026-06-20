@@ -17,6 +17,10 @@ kagitch init -r  # shell integration (one time)
 ```
 
 > Requires `pip install kaggle` and Python 3.8+.
+>
+> **Windows / PowerShell:** `kagitch init` detects `$PROFILE` for both
+> PowerShell 5.1 and 7+. Run `kagitch init -r` to print a `. $PROFILE`
+> reload command (no `os.execv()` on Windows).
 
 ---
 

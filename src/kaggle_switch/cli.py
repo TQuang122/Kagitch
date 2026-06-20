@@ -169,7 +169,7 @@ def render_help() -> None:
 
     console.print()
     console.print("[bold]Options:[/bold]")
-    console.print("  [cyan]-r, --reload[/]   Reload shell after init when supported")
+    console.print("  [cyan]-r, --reload[/]   Reload shell after init (. $PROFILE on PowerShell)")
 
     console.print()
     console.print("[bold]Examples:[/bold]")
