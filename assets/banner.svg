@@ -1,0 +1,83 @@
+<svg width="1200" height="360" viewBox="0 0 1200 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="background" x1="70" y1="20" x2="1130" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#07131E"/>
+      <stop offset="0.52" stop-color="#0B1D2B"/>
+      <stop offset="1" stop-color="#092735"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="90" y1="96" x2="655" y2="278" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#20BEFF"/>
+      <stop offset="1" stop-color="#58E0FF"/>
+    </linearGradient>
+    <linearGradient id="terminal" x1="743" y1="70" x2="1115" y2="292" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102838"/>
+      <stop offset="1" stop-color="#091923"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#02080D" flood-opacity="0.5"/>
+    </filter>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#7CDFFF" stroke-opacity="0.045"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="360" rx="28" fill="url(#background)"/>
+  <rect width="1200" height="360" rx="28" fill="url(#grid)"/>
+  <circle cx="1042" cy="74" r="158" fill="#20BEFF" fill-opacity="0.1" filter="url(#glow)"/>
+  <circle cx="166" cy="344" r="132" fill="#20BEFF" fill-opacity="0.07" filter="url(#glow)"/>
+
+  <g transform="translate(80 78)">
+    <rect width="58" height="58" rx="15" fill="#20BEFF"/>
+    <path d="M17 14V44M40 14L24 29L41 44" stroke="#061722" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <text x="158" y="124" fill="url(#accent)" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="66" font-weight="800" letter-spacing="-2.5">kagitch</text>
+  <text x="82" y="183" fill="#EAF8FF" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="650" letter-spacing="-0.4">Switch Kaggle accounts — keep your flow.</text>
+  <text x="82" y="222" fill="#91A9B8" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="20">OAuth-first multi-account manager for the Kaggle CLI</text>
+
+  <g transform="translate(82 260)">
+    <rect width="144" height="38" rx="19" fill="#20BEFF" fill-opacity="0.12" stroke="#20BEFF" stroke-opacity="0.34"/>
+    <circle cx="22" cy="19" r="5" fill="#42D392"/>
+    <text x="36" y="25" fill="#BEEFFF" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="14" font-weight="600">OAuth-first</text>
+    <rect x="156" width="120" height="38" rx="19" fill="#FFFFFF" fill-opacity="0.045" stroke="#FFFFFF" stroke-opacity="0.1"/>
+    <text x="176" y="25" fill="#B6C9D4" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="14" font-weight="600">Python CLI</text>
+    <rect x="288" width="132" height="38" rx="19" fill="#FFFFFF" fill-opacity="0.045" stroke="#FFFFFF" stroke-opacity="0.1"/>
+    <text x="308" y="25" fill="#B6C9D4" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="14" font-weight="600">zero shuffle</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="727" y="58" width="403" height="244" rx="18" fill="url(#terminal)" stroke="#24526A" stroke-width="1.5"/>
+    <path d="M727 106H1130" stroke="#24526A" stroke-width="1.5"/>
+    <circle cx="754" cy="82" r="5" fill="#FF6B6B"/>
+    <circle cx="773" cy="82" r="5" fill="#FFD166"/>
+    <circle cx="792" cy="82" r="5" fill="#42D392"/>
+    <text x="928" y="87" text-anchor="middle" fill="#6F8C9C" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">~/terminal</text>
+
+    <text x="754" y="142" fill="#42D392" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="16" font-weight="700">❯</text>
+    <text x="778" y="142" fill="#EAF8FF" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="16">kagitch 1</text>
+
+    <rect x="754" y="161" width="349" height="48" rx="9" fill="#20BEFF" fill-opacity="0.09" stroke="#20BEFF" stroke-opacity="0.22"/>
+    <circle cx="776" cy="185" r="7" fill="#42D392"/>
+    <path d="M773 185L775 187L780 182" stroke="#062318" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="794" y="190" fill="#C9F4FF" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="15">Switched to aurora-lab</text>
+
+    <text x="754" y="231" fill="#42D392" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="16" font-weight="700">❯</text>
+    <text x="778" y="231" fill="#EAF8FF" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="16">kagitch</text>
+
+    <rect x="754" y="244" width="349" height="22" rx="5" fill="#20BEFF" fill-opacity="0.1" stroke="#20BEFF" stroke-opacity="0.28"/>
+    <text x="770" y="259" fill="#66D9F2" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11" font-weight="700">#</text>
+    <text x="798" y="259" fill="#66D9F2" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11" font-weight="700">Account</text>
+    <text x="930" y="259" fill="#66D9F2" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11" font-weight="700">Auth</text>
+    <text x="1023" y="259" fill="#66D9F2" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11" font-weight="700">Status</text>
+
+    <rect x="754" y="266" width="349" height="25" rx="5" fill="#42D392" fill-opacity="0.06" stroke="#24526A" stroke-opacity="0.75"/>
+    <text x="770" y="283" fill="#42D392" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12" font-weight="700">1</text>
+    <text x="798" y="283" fill="#EAF8FF" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12" font-weight="600">aurora-lab</text>
+    <text x="930" y="283" fill="#42D392" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">✓ OAuth</text>
+    <circle cx="1027" cy="279" r="4" fill="#42D392"/>
+    <text x="1037" y="283" fill="#42D392" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11">active</text>
+  </g>
+</svg>

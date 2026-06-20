@@ -1,22 +1,11 @@
 
-```
-██╗  ██╗ █████╗  ██████╗ ██╗████████╗ ██████╗██╗  ██╗
-██║ ██╔╝██╔══██╗██╔════╝ ██║╚══██╔══╝██╔════╝██║  ██║
-█████╔╝ ███████║██║  ███╗██║   ██║   ██║     ███████║
-██╔═██╗ ██╔══██║██║   ██║██║   ██║   ██║     ██╔══██║
-██║  ██╗██║  ██║╚██████╔╝██║   ██║   ╚██████╗██║  ██║
-╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝   ╚═╝    ╚═════╝╚═╝  ╚═╝
-        Kaggle multi-account manager · v1.0.0
-```
+<p align="center">
+  <img src="assets/banner.svg" alt="Kagitch — switch Kaggle accounts and keep your flow" width="100%">
+</p>
 
-# `Kagitch`
-
-**Multi-account manager for Kaggle.**  
-OAuth-first, no file shuffling.
-
-`kagitch add` · `kagitch switch` · `kagitch check`
-
-
+<p align="center">
+  <code>kagitch add</code> · <code>kagitch switch</code> · <code>kagitch check</code>
+</p>
 
 ---
 
@@ -73,4 +62,3 @@ The shell wrapper sets `KAGGLE_CONFIG_DIR` when you switch.
 ```text
 ~/.config/kagitch/accounts.json
 ```
-
