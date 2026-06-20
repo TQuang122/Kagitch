@@ -501,7 +501,10 @@ def cmd_doctor(config: dict) -> int:
     if not rc_ok:
         recs.append(f"[bold]kagitch init[/]     install shell wrapper")
     else:
-        reload_cmd = f"[bold]source {rc}[/] or [bold]kagitch init -r[/]"
+        if shell == "powershell":
+            reload_cmd = f"[bold]. {rc}[/] or [bold]kagitch init -r[/]"
+        else:
+            reload_cmd = f"[bold]source {rc}[/] or [bold]kagitch init -r[/]"
         recs.append(f"{reload_cmd}   reload wrapper in current shell")
     if not kaggle_path:
         recs.append(f"[bold]pip install kaggle[/]   install Kaggle CLI")
@@ -655,9 +658,14 @@ def _reload(shell: str) -> None:
     import os
 
     if shell == "powershell":
-        shell_path = os.environ.get("SHELL", "powershell.exe")
-    else:
-        shell_path = os.environ.get("SHELL", "")
+        ps_profile = rc_file_for_shell("powershell")
+        if ps_profile:
+            console.print(f"  Run: [bold]. {ps_profile}[/]")
+        else:
+            console.print("  Restart your PowerShell session.")
+        return
+
+    shell_path = os.environ.get("SHELL", "")
     if shell_path:
         console.print(f"  Reloading {shell}...")
         os.execv(shell_path, [shell_path, "-l"])

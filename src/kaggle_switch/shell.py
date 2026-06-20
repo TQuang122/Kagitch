@@ -359,7 +359,13 @@ def rc_file_for_shell(shell: str) -> Path | None:
         return home / ".config" / "fish" / "config.fish"
     if shell == "powershell":
         if sys.platform == "win32":
-            return home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
+            ps7 = home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
+            ps51 = home / "Documents" / "WindowsPowerShell" / "Microsoft.PowerShell_profile.ps1"
+            if ps7.exists():
+                return ps7
+            if ps51.exists():
+                return ps51
+            return ps7  # default to PowerShell 7
         return home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"
     return None
 
