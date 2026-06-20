@@ -37,6 +37,24 @@ class TestList:
         assert rc == 1
         assert "No accounts configured" in out
 
+    def test_bare_command_shows_dashboard(self, temp_env, capsys, monkeypatch):
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "alpha", "config_dir": ""},
+            "2": {"name": "beta", "config_dir": "beta"},
+        }
+        cfg.save_config(config)
+
+        rc, out = run_cli(capsys=capsys)
+
+        assert rc == 0
+        assert "Dashboard" in out
+        assert "Active" in out
+        assert "alpha" in out
+        assert "beta" in out
+        assert "No creds" in out
+
     def test_list_shows_accounts(self, temp_env, capsys):
         config = cfg.load_config()
         config["accounts"] = {
@@ -155,6 +173,24 @@ class TestSwitch:
         cfg.save_config(config)
         rc, out = run_cli("switch", "2", capsys=capsys)
         assert rc == 0
+        assert "export KAGGLE_CONFIG_DIR=" in out
+
+    def test_switch_without_arg_prompts_for_account(self, temp_env, capsys, monkeypatch):
+        import io
+
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "alpha", "config_dir": ""},
+            "2": {"name": "beta", "config_dir": "beta"},
+        }
+        cfg.save_config(config)
+        monkeypatch.setattr("sys.stdin", io.StringIO("2\n"))
+
+        rc, out = run_cli("switch", capsys=capsys)
+
+        assert rc == 0
+        assert "Select account" in out
+        assert "beta" in out
         assert "export KAGGLE_CONFIG_DIR=" in out
 
     def test_switch_to_oauth_copies_credentials_json(self, temp_env, capsys):
@@ -438,6 +474,8 @@ class TestDoctor:
 
         rc, out = run_cli("doctor", capsys=capsys)
         assert rc == 0
+        assert "Status:" in out
+        assert "checks passed" in out
         assert "Kaggle CLI" in out
         assert "Shell wrapper" in out
         assert "Config dir" in out

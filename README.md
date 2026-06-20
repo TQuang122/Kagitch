@@ -41,8 +41,10 @@ kaggle quota          # kaggle CLI follows the switched account
 
 | Command                     | Aliases                  | What it does                            |
 | --------------------------- | ------------------------ | --------------------------------------- |
-| `kagitch` / `list`          | `ls`                     | List accounts                           |
+| `kagitch`                   |                          | Show dashboard + active account         |
+| `kagitch list`              | `ls`                     | List accounts                           |
 | `kagitch <N\|name>`         |                          | Switch to account                       |
+| `kagitch switch [N\|name]`  |                          | Prompt or switch to account             |
 | `kagitch current`           | `cur`, `.`               | Show active account                     |
 | `kagitch add <name>`        | `login`                  | Add account via OAuth                   |
 | `kagitch add <name> <file>` |                          | Add account via legacy API key          |

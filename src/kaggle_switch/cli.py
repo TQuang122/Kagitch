@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from rich.panel import Panel
-from rich.prompt import Confirm
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 from rich.traceback import Traceback
@@ -108,8 +108,9 @@ def render_help() -> None:
     sections = {
         "left": {
             "Account": [
-                ("kagitch", "List accounts + show current"),
+                ("kagitch", "Show dashboard + active account"),
                 ("kagitch <N|name>", "Switch to account"),
+                ("kagitch switch [N|name]", "Prompt or switch to account"),
                 ("kagitch list", "List accounts"),
                 ("kagitch current", "Show active account"),
             ],
@@ -198,6 +199,39 @@ def cmd_list(config: dict) -> int:
         rows.append([str(acc.number), acc.name, str(acc.path), status])
 
     col_opts = {0: {"justify": "right", "width": 3}}
+    console.print(bordered_table(headers, rows, active_index=active_idx, column_options=col_opts))
+    return 0
+
+
+def cmd_dashboard(config: dict) -> int:
+    _render_banner()
+    active = current_active(config)
+    accounts = get_accounts(config)
+    if not accounts:
+        console.print(panel_body("", warn("No accounts configured. Add one:"), C_WARN))
+        console.print(f"  [green]kagitch add <name> /path/to/kaggle.json[/]")
+        return 1
+
+    active_acc = find_account(config, str(active)) if active else None
+    active_label = f"#{active_acc.number} {active_acc.name}" if active_acc else "default ~/.kaggle"
+    console.print(card([f"  Active  [bold]{active_label}[/]", "", "  Run [bold]kagitch switch[/] to choose another account."], title="Dashboard"))
+
+    headers = ["#", "Name", "Auth", "Path", "Status"]
+    rows: list[list[str]] = []
+    active_idx: int | None = None
+    for i, acc in enumerate(accounts):
+        if acc.number == active:
+            active_idx = i
+        auth = _auth_method(acc.path)
+        rows.append([
+            acc.number,
+            acc.name,
+            f"[{C_DIM}]No creds[/]" if auth == "No creds" else _render_auth(auth),
+            str(acc.path),
+            "● active" if acc.number == active else "",
+        ])
+
+    col_opts = {0: {"justify": "right", "width": 3}, 2: {"justify": "center"}}
     console.print(bordered_table(headers, rows, active_index=active_idx, column_options=col_opts))
     return 0
 
@@ -328,6 +362,23 @@ def cmd_switch(config: dict, key: str) -> int:
     return 0
 
 
+def cmd_switch_prompt(config: dict) -> int:
+    accounts = get_accounts(config)
+    if not accounts:
+        console.print(err("No accounts configured — use [bold]kagitch add <name>[/]"))
+        return 1
+
+    console.print("[bold]Select account[/]")
+    active = current_active(config)
+    for acc in accounts:
+        marker = " [active]" if acc.number == active else ""
+        console.print(f"  {acc.number}. {acc.name}{marker}")
+
+    choice = Prompt.ask("Select account", default=active or accounts[0].number)
+    console.print()
+    return cmd_switch(config, choice)
+
+
 def _auth_method(path: Path) -> str:
     json_file = path / "kaggle.json"
     if json_file.exists():
@@ -400,8 +451,26 @@ def cmd_doctor(config: dict) -> int:
         content = rc.read_text()
         rc_ok = "kagitch" in content and "shellpath" in content
 
+    config_dir = Path.home() / ".kaggle"
+    creds = config_dir / "credentials.json"
+    active_acc = find_account(config, str(active_num)) if active_num else None
+
+    check_results = [
+        bool(kaggle_path),
+        rc_ok,
+        config_dir.is_dir() and os.access(config_dir, os.R_OK),
+        not creds.exists() or os.access(creds, os.R_OK),
+        active_acc is not None or active_num is None,
+    ]
+    passed_checks = sum(1 for result in check_results if result)
+    total_checks = len(check_results)
+
     exit_code = 0
     body = Text()
+    body.append(f"  Status: {passed_checks}/{total_checks} checks passed\n", style="bold")
+    if passed_checks < total_checks:
+        body.append("  Needs action: see recommendations below\n", style=C_WARN)
+    body.append("\n")
 
     def _line(icon: str, style: str, label: str, detail: str, detail_style: str = C_DIM) -> None:
         body.append(f"  {icon}  {label:<18}", style=style)
@@ -423,7 +492,6 @@ def cmd_doctor(config: dict) -> int:
         _line("\u2717", C_ERROR, "Shell wrapper", "not installed \u2014 kagitch init")
 
     # 3 — Config dir accessible
-    config_dir = Path.home() / ".kaggle"
     if config_dir.is_dir() and os.access(config_dir, os.R_OK):
         _line("\u2713", C_OK, "Config dir", str(config_dir))
     elif config_dir.is_dir():
@@ -432,7 +500,6 @@ def cmd_doctor(config: dict) -> int:
         _line("\u2014", C_DIM, "Config dir", "not created yet (will be on first use)")
 
     # 4 — OAuth creds path
-    creds = config_dir / "credentials.json"
     if creds.exists():
         if os.access(creds, os.R_OK):
             _line("\u2713", C_OK, "OAuth creds", str(creds))
@@ -443,9 +510,6 @@ def cmd_doctor(config: dict) -> int:
         _line("\u2014", C_DIM, "OAuth creds", "none present (created on OAuth login)")
 
     # 5 — Active account
-    active_acc = None
-    if active_num:
-        active_acc = find_account(config, str(active_num))
     if active_acc:
         _line("\u2713", C_OK, "Active account", f"#{active_acc.number} {active_acc.name}")
     else:
@@ -936,7 +1000,7 @@ def _main() -> int:
     args = sys.argv[1:]
 
     if not args:
-        return cmd_list(config)
+        return cmd_dashboard(config)
 
     cmd = args[0]
     rest = args[1:]
@@ -957,8 +1021,7 @@ def _main() -> int:
 
     if cmd == "switch":
         if not rest:
-            console.print(warn("Usage: kagitch switch <N>"))
-            return 1
+            return cmd_switch_prompt(config)
         return cmd_switch(config, rest[0])
 
     if cmd in ("add", "login"):
