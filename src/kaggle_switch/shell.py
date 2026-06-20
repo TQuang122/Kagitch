@@ -1,9 +1,128 @@
 """Shell integration function generation."""
 from __future__ import annotations
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 SUPPORTED_SHELLS = ("zsh", "bash", "fish", "powershell")
+
+
+# ── Single source of truth for all commands/aliases/flags ──────
+
+@dataclass
+class _CmdDef:
+    desc: str
+    aliases: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _FlagDef:
+    desc: str
+    short: str | None = None
+
+
+_COMMANDS: dict[str, _CmdDef] = {
+    "list":        _CmdDef("List all accounts",                  ["ls"]),
+    "current":     _CmdDef("Show active account",               ["cur", "."]),
+    "switch":      _CmdDef("Switch to account N"),
+    "add":         _CmdDef("Register a new account",            ["login"]),
+    "remove":      _CmdDef("Remove an account",                 ["rm"]),
+    "rename":      _CmdDef("Rename an account"),
+    "patch":       _CmdDef("Patch kernel-metadata.json id"),
+    "shellpath":   _CmdDef("Print shell function"),
+    "init":        _CmdDef("Auto-install shell integration"),
+    "check":       _CmdDef("Check account health and quota"),
+    "doctor":      _CmdDef("System diagnostics"),
+    "update":      _CmdDef("Pull latest version from git"),
+    "completions": _CmdDef("Generate shell completion"),
+    "help":        _CmdDef("Show help"),
+    "version":     _CmdDef("Show version"),
+}
+
+_FLAGS: dict[str, _FlagDef] = {
+    "help":    _FlagDef("Show help", "-h"),
+    "version": _FlagDef("Show version", "-v"),
+}
+
+
+# ── Generation helpers ─────────────────────────────────────────
+
+def _all_known_tokens() -> list[str]:
+    """Every token the shell wrapper should accept as a known command."""
+    tokens: list[str] = []
+    for cmd, defn in _COMMANDS.items():
+        tokens.append(cmd)
+        tokens.extend(a for a in defn.aliases)
+    for flag_name, defn in _FLAGS.items():
+        if defn.short:
+            tokens.append(defn.short)
+        tokens.append(f"--{flag_name}")
+    return tokens
+
+
+def _build_cmds_str() -> str:
+    return " ".join(_all_known_tokens())
+
+
+def _zsh_cmds_block() -> str:
+    lines: list[str] = []
+    for cmd, defn in _COMMANDS.items():
+        lines.append(f"    '{cmd}:{defn.desc}'")
+        for alias in defn.aliases:
+            lines.append(f"    '{alias}:Alias for {cmd}'")
+    return "\n".join(lines)
+
+
+def _zsh_flags_block() -> str:
+    lines: list[str] = []
+    for flag_name, defn in _FLAGS.items():
+        if defn.short:
+            lines.append(f"    '{defn.short}[{defn.desc}]' \\")
+        lines.append(f"    '--{flag_name}[{defn.desc}]' \\")
+    return "\n".join(lines)
+
+
+def _fish_cmds_block() -> str:
+    lines: list[str] = []
+    for cmd, defn in _COMMANDS.items():
+        lines.append(f'complete -c kagitch -f -n __fish_use_subcommand -a {cmd} -d "{defn.desc}"')
+        for alias in defn.aliases:
+            lines.append(f'complete -c kagitch -f -n __fish_use_subcommand -a {alias} -d "Alias for {cmd}"')
+    for flag_name, defn in _FLAGS.items():
+        parts = ["complete -c kagitch -f -n __fish_use_subcommand"]
+        if defn.short:
+            parts.append(f"-s {defn.short.lstrip('-')}")
+        parts.append(f"-l {flag_name}")
+        parts.append(f'-d "{defn.desc}"')
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
+
+
+def _ps_cmds_block() -> str:
+    lines: list[str] = []
+    for cmd, defn in _COMMANDS.items():
+        lines.append(_ps_result(cmd, cmd, defn.desc))
+        for alias in defn.aliases:
+            lines.append(_ps_result(alias, alias, f"Alias for {cmd}"))
+    for flag_name, defn in _FLAGS.items():
+        if defn.short:
+            lines.append(_ps_result(defn.short, defn.short, defn.desc))
+        lines.append(_ps_result(flag_name, flag_name, defn.desc))
+    return "\n".join(lines)
+
+
+def _ps_result(completion: str, list_item: str, desc: str) -> str:
+    return (
+        f"        [System.Management.Automation.CompletionResult]::new("
+        f"'{completion}', '{list_item}', "
+        f"[System.Management.Automation.CompletionResultType]::ParameterValue, "
+        f"'{desc}')"
+    )
+
+
+# ── Shell wrapper functions ────────────────────────────────────
+
+_KNOWN_CMDS_STR = _build_cmds_str()
 
 _POWERSHELL_FUNCTION = """\
 function Invoke-Kagitch {
@@ -27,14 +146,14 @@ function Invoke-Kagitch {
 Set-Alias -Name kagitch -Value Invoke-Kagitch -Scope Global -Option AllScope
 """
 
-_ZSH_BASH_FUNCTION = """\
-kagitch() {
+_ZSH_BASH_FUNCTION = f"""\
+kagitch() {{
   if [[ $# -eq 0 ]]; then
     command kagitch list
     return
   fi
 
-  local known_cmds=" list ls current cur . switch add login remove rm rename patch shellpath init check doctor update completions -h help -v version --help --version "
+  local known_cmds=" {_KNOWN_CMDS_STR} "
   if [[ "$known_cmds" =~ " $1 " ]]; then
     command kagitch "$@"
   else
@@ -55,17 +174,17 @@ kagitch() {
       fi
     done <<< "$out"
   fi
-}
+}}
 """
 
-_FISH_FUNCTION = """\
+_FISH_FUNCTION = f"""\
 function kagitch
   if test (count $argv) -eq 0
     command kagitch list
     return
   end
 
-  set -l known_cmds list ls current cur . switch add login remove rm rename patch shellpath init check doctor update completions -h help -v version --help --version
+  set -l known_cmds {_KNOWN_CMDS_STR}
   if contains -- $argv[1] $known_cmds
     command kagitch $argv
   else
@@ -93,6 +212,106 @@ function kagitch
 end
 """
 
+
+# ── Shell completion generators ───────────────────────────────
+
+_ZSH_CMDS_BLOCK = _zsh_cmds_block()
+_ZSH_FLAGS_BLOCK = _zsh_flags_block()
+_FISH_CMDS_BLOCK = _fish_cmds_block()
+_PS_CMDS_BLOCK = _ps_cmds_block()
+
+_ZSH_COMPLETION = f"""\
+#compdef kagitch
+# kagitch shell completion — do not edit manually
+
+__kagitch_accounts() {{
+  local -a accounts
+  while IFS=: read -r num name; do
+    accounts+=("$num:$name")
+  done < <(command kagitch __list_accounts 2>/dev/null)
+  _describe 'account' accounts
+}}
+
+__kagitch_commands() {{
+  local -a commands
+  commands=(
+{_ZSH_CMDS_BLOCK}
+  )
+  _describe 'command' commands
+}}
+
+_kagitch() {{
+  local curcontext="$curcontext" state state_descs line
+  typeset -A opt_args
+
+  _arguments -C \\
+{_ZSH_FLAGS_BLOCK}    '1: :->cmd_or_num' \\
+    '*:: :->args'
+
+  case $state in
+    cmd_or_num)
+      _alternative \\
+        'accounts:account:__kagitch_accounts' \\
+        'commands:command:__kagitch_commands'
+      ;;
+  esac
+}}
+
+_kagitch "$@"
+"""
+
+_BASH_COMPLETION = f"""\
+# kagitch shell completion — source this file or add to your .bashrc
+
+_kagitch_completions() {{
+  local cur="${{COMP_WORDS[COMP_CWORD]}}"
+  local cmds="{_KNOWN_CMDS_STR}"
+
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    local -a accounts
+    while IFS=: read -r num name; do
+      accounts+=("$num" "$name")
+    done < <(command kagitch __list_accounts 2>/dev/null)
+    COMPREPLY=($(compgen -W "$cmds ${{accounts[*]}}" -- "$cur"))
+  fi
+}}
+
+complete -F _kagitch_completions kagitch
+"""
+
+_FISH_COMPLETION = f"""\
+# kagitch shell completion — do not edit manually
+
+{_FISH_CMDS_BLOCK}
+
+# Dynamic account completions for first argument
+complete -c kagitch -f -n __fish_use_subcommand -a "(command kagitch __list_accounts 2>/dev/null | string replace : \\\\t)"
+"""
+
+_POWERSHELL_COMPLETION = f"""\
+# kagitch PowerShell completion — add to your $PROFILE
+
+Register-ArgumentCompleter -Native -CommandName kagitch -ScriptBlock {{
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $commands = @(
+{_PS_CMDS_BLOCK}
+    )
+
+    # Dynamic account completions
+    $accounts = & "kagitch.exe" __list_accounts 2>&1 | ForEach-Object {{
+        $num, $name = $_ -split ':'
+        [System.Management.Automation.CompletionResult]::new($num, "$num ($name)", [System.Management.Automation.CompletionResultType]::ParameterValue, $name)
+    }}
+
+    $commands + $accounts | Where-Object {{
+        $_.CompletionText -like "$wordToComplete*" -or $_.ListItemText -like "$wordToComplete*"
+    }}
+}}
+"""
+
+
+# ── Public API ─────────────────────────────────────────────────
 
 def shellpath(shell: str) -> str:
     """Return the shell function for the given shell type."""
@@ -146,161 +365,6 @@ def eval_line_for_shell(shell: str) -> str:
     if shell == "powershell":
         return 'kagitch shellpath powershell | Out-String | Invoke-Expression'
     return 'eval "$(kagitch shellpath zsh)"'
-
-
-# ── Shell completion generators ───────────────────────────────
-
-_ZSH_COMPLETION = """\
-#compdef kagitch
-# kagitch shell completion — do not edit manually
-
-__kagitch_accounts() {
-  local -a accounts
-  while IFS=: read -r num name; do
-    accounts+=("$num:$name")
-  done < <(command kagitch __list_accounts 2>/dev/null)
-  _describe 'account' accounts
-}
-
-__kagitch_commands() {
-  local -a commands
-  commands=(
-    'list:List all accounts'
-    'ls:Alias for list'
-    'current:Show active account'
-    'cur:Alias for current'
-    'switch:Switch to account N'
-    'add:Register a new account'
-    'login:Alias for add'
-    'remove:Remove an account'
-    'rm:Alias for remove'
-    'rename:Rename an account'
-    'patch:Patch kernel-metadata.json id'
-    'shellpath:Print shell function'
-    'init:Auto-install shell integration'
-    'check:Check account health and quota'
-    'doctor:System diagnostics'
-    'update:Pull latest version from git'
-    'completions:Generate shell completion'
-    'help:Show help'
-    'version:Show version'
-  )
-  _describe 'command' commands
-}
-
-_kagitch() {
-  local curcontext="$curcontext" state state_descs line
-  typeset -A opt_args
-
-  _arguments -C \\
-    '-v[Show version]' \\
-    '--version[Show version]' \\
-    '-h[Show help]' \\
-    '--help[Show help]' \\
-    '1: :->cmd_or_num' \\
-    '*:: :->args'
-
-  case $state in
-    cmd_or_num)
-      _alternative \\
-        'accounts:account:__kagitch_accounts' \\
-        'commands:command:__kagitch_commands'
-      ;;
-  esac
-}
-
-_kagitch "$@"
-"""
-
-_BASH_COMPLETION = """\
-# kagitch shell completion — source this file or add to your .bashrc
-
-_kagitch_completions() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-  local cmds="list ls current cur switch add login remove rm rename patch shellpath init check doctor update completions -h help -v version --help --version"
-
-  if [[ $COMP_CWORD -eq 1 ]]; then
-    local -a accounts
-    while IFS=: read -r num name; do
-      accounts+=("$num" "$name")
-    done < <(command kagitch __list_accounts 2>/dev/null)
-    COMPREPLY=($(compgen -W "$cmds ${accounts[*]}" -- "$cur"))
-  fi
-}
-
-complete -F _kagitch_completions kagitch
-"""
-
-_FISH_COMPLETION = """\
-# kagitch shell completion — do not edit manually
-
-complete -c kagitch -f -n __fish_use_subcommand -a list -d "List all accounts"
-complete -c kagitch -f -n __fish_use_subcommand -a ls -d "Alias for list"
-complete -c kagitch -f -n __fish_use_subcommand -a current -d "Show active account"
-complete -c kagitch -f -n __fish_use_subcommand -a cur -d "Alias for current"
-complete -c kagitch -f -n __fish_use_subcommand -a switch -d "Switch to account N"
-complete -c kagitch -f -n __fish_use_subcommand -a add -d "Register a new account"
-complete -c kagitch -f -n __fish_use_subcommand -a login -d "Alias for add"
-complete -c kagitch -f -n __fish_use_subcommand -a remove -d "Remove an account"
-complete -c kagitch -f -n __fish_use_subcommand -a rm -d "Alias for remove"
-complete -c kagitch -f -n __fish_use_subcommand -a rename -d "Rename an account"
-complete -c kagitch -f -n __fish_use_subcommand -a patch -d "Patch kernel-metadata.json id"
-complete -c kagitch -f -n __fish_use_subcommand -a shellpath -d "Print shell function"
-complete -c kagitch -f -n __fish_use_subcommand -a init -d "Auto-install shell integration"
-complete -c kagitch -f -n __fish_use_subcommand -a check -d "Check account health and quota"
-complete -c kagitch -f -n __fish_use_subcommand -a doctor -d "System diagnostics"
-complete -c kagitch -f -n __fish_use_subcommand -a update -d "Pull latest version from git"
-complete -c kagitch -f -n __fish_use_subcommand -a completions -d "Generate shell completion"
-complete -c kagitch -f -n __fish_use_subcommand -s v -l version -d "Show version"
-complete -c kagitch -f -n __fish_use_subcommand -a version -d "Show version"
-complete -c kagitch -f -n __fish_use_subcommand -s h -l help -d "Show help"
-complete -c kagitch -f -n __fish_use_subcommand -a help -d "Show help"
-
-# Dynamic account completions for first argument
-complete -c kagitch -f -n __fish_use_subcommand -a "(command kagitch __list_accounts 2>/dev/null | string replace : \\t)"
-"""
-
-_POWERSHELL_COMPLETION = """\
-# kagitch PowerShell completion — add to your $PROFILE
-
-Register-ArgumentCompleter -Native -CommandName kagitch -ScriptBlock {
-    param($wordToComplete, $commandAst, $cursorPosition)
-
-    $commands = @(
-        [System.Management.Automation.CompletionResult]::new('list', 'list', [System.Management.Automation.CompletionResultType]::ParameterValue, 'List all accounts')
-        [System.Management.Automation.CompletionResult]::new('ls', 'ls', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Alias for list')
-        [System.Management.Automation.CompletionResult]::new('current', 'current', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Show active account')
-        [System.Management.Automation.CompletionResult]::new('cur', 'cur', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Alias for current')
-        [System.Management.Automation.CompletionResult]::new('switch', 'switch', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Switch to account N')
-        [System.Management.Automation.CompletionResult]::new('add', 'add', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Register a new account')
-        [System.Management.Automation.CompletionResult]::new('login', 'login', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Alias for add')
-        [System.Management.Automation.CompletionResult]::new('remove', 'remove', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Remove an account')
-        [System.Management.Automation.CompletionResult]::new('rm', 'rm', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Alias for remove')
-        [System.Management.Automation.CompletionResult]::new('rename', 'rename', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Rename an account')
-        [System.Management.Automation.CompletionResult]::new('patch', 'patch', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Patch kernel-metadata.json id')
-        [System.Management.Automation.CompletionResult]::new('shellpath', 'shellpath', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Print shell function')
-        [System.Management.Automation.CompletionResult]::new('init', 'init', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Auto-install shell integration')
-        [System.Management.Automation.CompletionResult]::new('check', 'check', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Check account health and quota')
-        [System.Management.Automation.CompletionResult]::new('doctor', 'doctor', [System.Management.Automation.CompletionResultType]::ParameterValue, 'System diagnostics')
-        [System.Management.Automation.CompletionResult]::new('update', 'update', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Pull latest version from git')
-        [System.Management.Automation.CompletionResult]::new('completions', 'completions', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Generate shell completion')
-        [System.Management.Automation.CompletionResult]::new('-h', '-h', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Show help')
-        [System.Management.Automation.CompletionResult]::new('help', 'help', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Show help')
-        [System.Management.Automation.CompletionResult]::new('-v', '-v', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Show version')
-        [System.Management.Automation.CompletionResult]::new('version', 'version', [System.Management.Automation.CompletionResultType]::ParameterValue, 'Show version')
-    )
-
-    # Dynamic account completions
-    $accounts = & "kagitch.exe" __list_accounts 2>&1 | ForEach-Object {
-        $num, $name = $_ -split ':'
-        [System.Management.Automation.CompletionResult]::new($num, "$num ($name)", [System.Management.Automation.CompletionResultType]::ParameterValue, $name)
-    }
-
-    $commands + $accounts | Where-Object {
-        $_.CompletionText -like "$wordToComplete*" -or $_.ListItemText -like "$wordToComplete*"
-    }
-}
-"""
 
 
 def completions(shell: str) -> str:
