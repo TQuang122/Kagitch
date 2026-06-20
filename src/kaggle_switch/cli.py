@@ -105,57 +105,64 @@ def render_help() -> None:
 
     sections = {
         "left": {
-            "Account": ("\U0001f4cb", [
+            "Account": [
                 ("kagitch", "List accounts + show current"),
                 ("kagitch <N|name>", "Switch to account"),
                 ("kagitch list", "List accounts"),
                 ("kagitch current", "Show active account"),
-            ]),
-            "Health": ("\U0001f50d", [
+            ],
+            "Health": [
                 ("kagitch check", "Check health + quota for all accounts"),
                 ("kagitch doctor", "System diagnostics"),
                 ("kagitch update", "Pull latest version from git"),
-                ("", ""),
-                ("", ""),
-                ("", ""),
-                ("", ""),
-            ]),
+            ],
         },
         "right": {
-            "Management": ("\u2699\ufe0f", [
+            "Management": [
                 ("kagitch add <name> [kaggle.json]", "Register a new account"),
                 ("kagitch remove <N|name>", "Remove an account"),
                 ("kagitch rename <N> <new_name>", "Rename an account"),
                 ("kagitch patch [path]", "Patch kernel-metadata.json id"),
-            ]),
-            "Shell integration": ("\U0001f527", [
+            ],
+            "Shell integration": [
                 ("kagitch init [-r]", "Auto-install shell integration"),
                 ("kagitch shellpath <shell>", "Print shell function"),
                 ("kagitch completions <shell>", "Print shell completion script"),
-            ]),
-            "Other": ("\u2139\ufe0f", [
+            ],
+            "Other": [
                 ("kagitch --version", "Show version"),
                 ("kagitch --help", "Show this help"),
-            ]),
+            ],
         },
     }
 
-    def _col_blocks(col: dict) -> Panel:
+    def _build_body(col: dict) -> str:
         parts: list[str] = []
-        for title, (icon, rows) in col.items():
-            parts.append(f"[bold]{icon} {title}[/]")
+        for title, rows in col.items():
+            parts.append(f"[bold]{title}[/]")
             parts.append(_cmd_rows(rows))
             parts.append("")
-        return Panel(
-            "\n".join(parts[:-1]),  # drop trailing blank
-            border_style="bright_black",
-            padding=(0, 1),
-        )
+        return "\n".join(parts[:-1])  # drop trailing blank
+
+    def _pad_body(body: str, target_lines: int) -> str:
+        lines = body.split("\n")
+        if len(lines) < target_lines:
+            lines.extend([""] * (target_lines - len(lines)))
+        return "\n".join(lines)
+
+    left_body = _build_body(sections["left"])
+    right_body = _build_body(sections["right"])
+    target = max(len(left_body.split("\n")), len(right_body.split("\n")))
+    left_body = _pad_body(left_body, target)
+    right_body = _pad_body(right_body, target)
 
     main = Table.grid(padding=(0, 2))
     main.add_column()
     main.add_column()
-    main.add_row(_col_blocks(sections["left"]), _col_blocks(sections["right"]))
+    main.add_row(
+        Panel(left_body, border_style="bright_black", padding=(0, 1)),
+        Panel(right_body, border_style="bright_black", padding=(0, 1)),
+    )
     console.print(main)
 
     console.print()
