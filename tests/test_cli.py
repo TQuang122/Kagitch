@@ -78,6 +78,7 @@ class TestLogin:
         assert "already exists" in out
 
     def test_login_oauth_success(self, temp_env, capsys, monkeypatch):
+        pytest.importorskip("kagglesdk")
         tmp_path, _ = temp_env
 
         class MockCreds:
@@ -109,6 +110,7 @@ class TestLogin:
         assert target.exists()
 
     def test_login_oauth_failure(self, temp_env, capsys, monkeypatch):
+        pytest.importorskip("kagglesdk")
         monkeypatch.setattr("kagglesdk.kaggle_client.KaggleClient", object)
 
         class FailingOAuth:
