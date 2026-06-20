@@ -71,10 +71,28 @@ def _gradient_text(text: str, start_hex: str, end_hex: str, bold: bool = False) 
     return result
 
 
+_BANNER_ART = [
+    "    __               _ __       __  ",
+    "   / /______ _____ _(_) /______/ /_ ",
+    "  / //_/ __ `/ __ `/ / __/ ___/ __ \\",
+    " / ,< / /_/ / /_/ / / /_/ /__/ / / /",
+    "/_/|_|\\__,_|\\__, /_/\\__/\\___/_/ /_/ ",
+    "           /____/                    ",
+]
+
+
 def _render_banner() -> None:
-    name = _gradient_text("kagitch", "#6366f1", "#06b6d4", bold=True)
+    sr, sg, sb = _parse_hex("#6366f1")
+    er, eg, eb = _parse_hex("#06b6d4")
+    n = len(_BANNER_ART)
+    for i, line in enumerate(_BANNER_ART):
+        t = i / (n - 1) if n > 1 else 0
+        r = int(sr + (er - sr) * t)
+        g = int(sg + (eg - sg) * t)
+        b = int(sb + (eb - sb) * t)
+        console.print(line, style=f"bold #{r:02x}{g:02x}{b:02x}")
     subtitle = Text(f"v{__version__}  \u2014 Kaggle multi-account manager", style="dim white")
-    console.print(Text.assemble(name, "  ", subtitle))
+    console.print(" " * 13, subtitle)
     console.print()
 
 

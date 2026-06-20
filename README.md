@@ -5,7 +5,7 @@ Multi-account manager for Kaggle. OAuth-first, no file shuffling.
 ## Install
 
 ```bash
-pip install kagitch
+pip install git+https://github.com/TQuang122/Kagitch.git
 kagitch init -r       # shell integration (one time)
 ```
 
