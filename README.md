@@ -35,18 +35,23 @@ kaggle quota          # kaggle CLI follows the switched account
 ## Commands
 
 
-| Command                     | What it does                            |
-| --------------------------- | --------------------------------------- |
-| `kagitch` / `list`          | List accounts                           |
-| `kagitch <N>`               | Switch to account                       |
-| `kagitch add <name>`        | Add account via OAuth                   |
-| `kagitch add <name> <file>` | Add account via legacy API key          |
-| `kagitch check`             | Check quota & auth for all accounts     |
-| `kagitch current`           | Show active account                     |
-| `kagitch remove <N>`        | Remove an account (deletes credentials) |
-| `kagitch rename <N> <name>` | Rename an account                       |
-| `kagitch init [-r]`         | Install / reload shell integration      |
-| `kagitch doctor`            | System diagnostics                      |
+| Command                     | Aliases                  | What it does                            |
+| --------------------------- | ------------------------ | --------------------------------------- |
+| `kagitch` / `list`          | `ls`                     | List accounts                           |
+| `kagitch <N|name>`          |                          | Switch to account                       |
+| `kagitch current`           | `cur`, `.`               | Show active account                     |
+| `kagitch add <name>`        | `login`                  | Add account via OAuth                   |
+| `kagitch add <name> <file>` |                          | Add account via legacy API key          |
+| `kagitch remove <N|name>`   | `rm`                     | Remove an account (deletes credentials) |
+| `kagitch rename <N> <name>` |                          | Rename an account                       |
+| `kagitch patch [path]`      |                          | Patch `kernel-metadata.json` id         |
+| `kagitch check`             |                          | Check quota & auth for all accounts     |
+| `kagitch doctor`            |                          | System diagnostics                      |
+| `kagitch update`            |                          | Pull latest version from git            |
+| `kagitch init [-r]`         |                          | Install / reload shell integration      |
+| `kagitch completions <sh>`  |                          | Print shell completion script           |
+| `kagitch help`              | `-h`, `--help`           | Show help                               |
+| `kagitch version`           | `-v`, `--version`        | Show version                            |
 
 
 ---

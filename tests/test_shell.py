@@ -35,6 +35,12 @@ class TestShellpath:
         result = sh.shellpath("zsh")
         assert 'known_cmds=' in result
 
+    def test_shell_functions_route_aliases_as_commands(self):
+        for shell in ("zsh", "fish"):
+            result = sh.shellpath(shell)
+            for alias in ("ls", "cur", ".", "rm", "login", "-h", "help", "-v", "version"):
+                assert alias in result
+
     def test_zsh_function_has_env_parsing(self):
         result = sh.shellpath("zsh")
         assert 'while IFS= read -r line' in result
@@ -154,6 +160,25 @@ class TestCompletions:
         assert "kagitch" in result
         assert "check" in result
         assert "completions" in result
+
+
+    def test_completions_include_aliases(self):
+        aliases = ("ls", "cur", "rm", "login", "help", "version", "update")
+        for shell in ("zsh", "bash", "fish", "powershell"):
+            result = sh.completions(shell)
+            for alias in aliases:
+                assert alias in result
+
+        zsh = sh.completions("zsh")
+        bash = sh.completions("bash")
+        powershell = sh.completions("powershell")
+        for result in (zsh, bash, powershell):
+            assert "-h" in result
+            assert "-v" in result
+
+        fish = sh.completions("fish")
+        assert "-s h" in fish
+        assert "-s v" in fish
 
     def test_completions_unsupported_shell(self):
         with pytest.raises(ValueError, match="Unsupported shell"):

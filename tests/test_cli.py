@@ -250,6 +250,50 @@ class TestRename:
         assert config["accounts"]["1"]["name"] == "newname"
 
 
+class TestAliases:
+    def test_help_aliases(self, temp_env, capsys):
+        for alias in ("-h", "help"):
+            rc, out = run_cli(alias, capsys=capsys)
+            assert rc == 0
+            assert "Usage" in out
+
+    def test_version_aliases(self, temp_env, capsys):
+        for alias in ("-v", "version"):
+            rc, out = run_cli(alias, capsys=capsys)
+            assert rc == 0
+            assert "v1.0.0" in out
+
+    def test_list_alias(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        rc, out = run_cli("ls", capsys=capsys)
+        assert rc == 0
+        assert "alpha" in out
+
+    def test_current_aliases(self, temp_env, capsys, monkeypatch):
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        for alias in ("cur", "."):
+            rc, out = run_cli(alias, capsys=capsys)
+            assert rc == 0
+            assert "alpha" in out
+
+    def test_remove_alias(self, temp_env, capsys, monkeypatch):
+        import io
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        monkeypatch.setattr("sys.stdin", io.StringIO("n\n"))
+        rc, out = run_cli("rm", "1", capsys=capsys)
+        assert rc == 0
+        assert "Cancelled" in out
+
+
+
 class TestShellpath:
     def test_shellpath_zsh(self, temp_env, capsys):
         rc, out = run_cli("shellpath", "zsh", capsys=capsys)
