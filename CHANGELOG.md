@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+- Made direct `kagitch switch` output human-friendly while keeping machine-readable env output for shell wrappers.
+- Improved `kagitch switch` picker validation for invalid account choices.
+- Added a README terminal snippet for the dashboard.
+
 ## [1.1.0] - 2026-06-21
 
 ### Added

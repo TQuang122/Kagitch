@@ -34,6 +34,21 @@ kagitch check         # check quota for all accounts
 kaggle quota          # kaggle CLI follows the switched account
 ```
 
+```text
+$ kagitch
+╭──────────── Dashboard ────────────╮
+│  Active  #2 work                  │
+│                                    │
+│  Run kagitch switch to choose...   │
+╰────────────────────────────────────╯
+┏━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ # ┃ Name     ┃ Auth     ┃ Path           ┃ Status   ┃
+┡━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
+│ 1 │ personal │ No creds │ ~/.kaggle      │          │
+│ 2 │ work     │ OAuth    │ ~/.kaggle-work │ ● active │
+└───┴──────────┴──────────┴────────────────┴──────────┘
+```
+
 ---
 
 ## Commands
