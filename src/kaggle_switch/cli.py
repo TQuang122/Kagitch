@@ -268,7 +268,13 @@ def _add_via_oauth(config: dict, name: str) -> int:
 def cmd_switch(config: dict, key: str) -> int:
     acc = find_account(config, key)
     if acc is None:
-        console.print(err(f"Account '{key}' not found"))
+        accounts = get_accounts(config)
+        if accounts:
+            pairs = ", ".join(f"{a.number} ({a.name})" for a in accounts)
+            console.print(err(f"Account '{key}' not found"))
+            console.print(f"  Available: {pairs}")
+        else:
+            console.print(err(f"No accounts configured — use [bold]kagitch add <name>[/]"))
         return 1
     if acc.is_default:
         print("unset KAGGLE_CONFIG_DIR")
