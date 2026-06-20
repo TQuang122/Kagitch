@@ -34,7 +34,7 @@ kagitch() {
     return
   fi
 
-  local known_cmds=" list current switch add remove rename patch shellpath init check doctor update completions --help --version "
+  local known_cmds=" list current switch add remove rename patch shellpath init check doctor update completions -h help -v version --help --version "
   if [[ "$known_cmds" =~ " $1 " ]]; then
     command kagitch "$@"
   else
@@ -65,7 +65,7 @@ function kagitch
     return
   end
 
-  set -l known_cmds list current switch add remove rename patch shellpath init check doctor update completions --help --version
+  set -l known_cmds list current switch add remove rename patch shellpath init check doctor update completions -h help -v version --help --version
   if contains -- $argv[1] $known_cmds
     command kagitch $argv
   else

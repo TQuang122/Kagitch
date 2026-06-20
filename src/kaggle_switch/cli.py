@@ -882,7 +882,7 @@ def _main() -> int:
         render_help()
         return 0
 
-    if cmd in ("--version", "-v"):
+    if cmd in ("--version", "-v", "version"):
         _render_banner()
         return 0
 
