@@ -313,6 +313,12 @@ Register-ArgumentCompleter -Native -CommandName kagitch -ScriptBlock {{
 
 # ── Public API ─────────────────────────────────────────────────
 
+def known_cmds_marker() -> str:
+    """Return the space-separated known-commands string used by doctor to
+    detect a stale shell wrapper in the rc file."""
+    return _KNOWN_CMDS_STR
+
+
 def shellpath(shell: str) -> str:
     """Return the shell function for the given shell type."""
     if shell in ("zsh", "bash"):

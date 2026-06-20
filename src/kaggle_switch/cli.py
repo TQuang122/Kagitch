@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from .shell import (
     completions as shell_completions,
     detect_shell,
     eval_line_for_shell,
+    known_cmds_marker,
     rc_file_for_shell,
     shellpath,
 )
@@ -385,52 +387,100 @@ def _render_quota(hours_str: str) -> str:
 
 
 def cmd_doctor(config: dict) -> int:
+    from . import __version__
+    from .checker import check_account
+
     shell = detect_shell()
     rc = rc_file_for_shell(shell)
-    rc_ok = False
-    if rc and rc.exists():
-        content = rc.read_text()
-        rc_ok = "kagitch" in content and "shellpath" in content
-
     kaggle_path = shutil.which("kaggle")
     accounts = get_accounts(config)
     active_num = current_active(config)
+    rc_ok = False
+    rc_current = False
+    version_marker = f"# kagitch shell integration v{__version__}"
 
+    if rc and rc.exists():
+        content = rc.read_text()
+        rc_ok = "kagitch" in content and "shellpath" in content
+        rc_current = version_marker in content
+
+    exit_code = 0
     body = Text()
 
-    if rc_ok:
-        body.append(f"  \u2713  Shell: ", style=f"{C_OK}")
-    else:
-        body.append(f"  \u2717  Shell: ", style=f"{C_ERROR}")
-    body.append(str(rc) if rc else str(shell), style="bold")
-    body.append("\n")
+    # ── Checks ────────────────────────────────────────────────
+    def _line(icon: str, style: str, label: str, detail: str, detail_style: str = C_DIM) -> None:
+        body.append(f"  {icon}  {label:<18}", style=style)
+        body.append(detail, style=detail_style)
+        body.append("\n")
 
+    # 1. Kaggle CLI
     if kaggle_path:
-        body.append(f"  \u2713  Kaggle CLI: ", style=f"{C_OK}")
-        body.append(kaggle_path, style=f"{C_DIM}")
+        _line("\u2713", C_OK, "Kaggle CLI", kaggle_path)
     else:
-        body.append(f"  \u2717  Kaggle CLI: ", style=f"{C_ERROR}")
-        body.append("not found", style=f"{C_DIM}")
+        exit_code = 1
+        _line("\u2717", C_ERROR, "Kaggle CLI", "not found \u2014 pip install kaggle")
+
+    # 2. Shell wrapper installed
+    if rc_ok:
+        _line("\u2713", C_OK, "Shell wrapper", str(rc) if rc else shell)
+    else:
+        exit_code = 1
+        _line("\u2717", C_ERROR, "Shell wrapper", "not installed \u2014 kagitch init")
+
+    # 3. Shell wrapper current?
+    if rc_ok:
+        if rc_current:
+            _line("\u2713", C_OK, "Shell version", f"v{__version__}")
+        else:
+            exit_code = 1
+            _line("\u26a0", C_WARN, "Shell version", f"outdated \u2014 source {rc} or kagitch init -r")
+    else:
+        _line("\u2014", C_DIM, "Shell version", "n/a (not installed)")
+
+    # 4. Config dir accessible
+    config_dir = Path.home() / ".kaggle"
+    if config_dir.is_dir() and os.access(config_dir, os.R_OK):
+        _line("\u2713", C_OK, "Config dir", str(config_dir))
+    elif config_dir.is_dir():
+        _line("\u2717", C_ERROR, "Config dir", f"{config_dir} not readable")
+    else:
+        _line("\u2014", C_DIM, "Config dir", "not created yet (will be on first use)")
+
+    # 5. OAuth creds path
+    creds = config_dir / "credentials.json"
+    if creds.exists():
+        if os.access(creds, os.R_OK):
+            _line("\u2713", C_OK, "OAuth creds", str(creds))
+        else:
+            exit_code = 1
+            _line("\u2717", C_ERROR, "OAuth creds", f"{creds} not readable")
+    else:
+        _line("\u2014", C_DIM, "OAuth creds", "none present (created on OAuth login)")
+
+    # 6. Active account
+    active_acc = None
+    if active_num:
+        active_acc = find_account(config, str(active_num))
+    if active_acc:
+        _line("\u2713", C_OK, "Active account", f"#{active_acc.number} {active_acc.name}")
+    else:
+        _line("\u2014", C_INFO, "Active account", "using default ~/.kaggle")
+
     body.append("\n")
 
-    body.append(f"  Config: {len(accounts)} account", style=f"{C_INFO}")
-    if len(accounts) != 1:
-        body.append("s")
-    body.append("\n\n")
-
-    with console.status("[bold green]Checking accounts...", spinner="dots") as _:
+    # ── Account summary ───────────────────────────────────────
+    if accounts:
+        body.append(f"  Accounts ({len(accounts)}):\n", style=C_INFO)
         for acc in accounts:
-            am = _auth_method(acc.path)
             is_active = acc.number == active_num
+            am = _auth_method(acc.path)
             if is_active:
-                body.append("  ", style=f"{C_OK}")
-                body.append("\u25c0 ", style=f"{C_OK}")
+                body.append("  \u25cf ", style=C_OK)
             else:
                 body.append("    ")
-            body.append(f"#{acc.number}  ", style="bold")
-            body.append(acc.name, style=f"{C_INFO}" if is_active else "")
+            body.append(f"#{acc.number} ", style="bold")
+            body.append(acc.name, style=C_INFO if is_active else "")
             body.append("  ")
-
             if am == "OAuth":
                 body.append("\u2713 OAuth", style=C_OK)
             elif am == "Legacy Key":
@@ -439,25 +489,45 @@ def cmd_doctor(config: dict) -> int:
                 body.append("No creds", style=C_ERROR)
             else:
                 body.append(f"? {am}", style=C_DIM)
-
-            body.append("  ")
             if is_active:
-                body.append("\u25cf active", style=f"bold {C_OK}")
-
+                body.append("  [active]", style=f"bold {C_OK}")
             body.append("\n")
+    else:
+        body.append("  No accounts configured.\n", style=C_DIM)
 
-    active_dir = ""
-    if active_num:
-        active_acc = find_account(config, str(active_num))
-        if active_acc:
-            active_dir = str(active_acc.path)
-            body.append(f"\n  Active: {active_dir}", style=C_OK)
-    if not active_dir:
-        active_dir = str(Path.home() / ".kaggle")
-        body.append(f"\n  Active: {active_dir}  (default)", style=C_DIM)
+    # ── Quota check for active account ────────────────────────
+    if kaggle_path and active_acc:
+        with console.status("[bold green]Checking quota...", spinner="dots") as _:
+            cr = check_account(active_acc)
+        body.append(f"\n  Quota ({active_acc.name}):\n", style="")
+        if cr.quota_ok:
+            body.append(f"    \u25b6  GPU  {_render_quota(cr.gpu_remaining)}\n")
+            body.append(f"    \u25b6  TPU  {_render_quota(cr.tpu_remaining)}\n")
+        elif cr.quota_error:
+            body.append(f"    [{C_ERROR}]\u2717[/]  {cr.quota_error[:80]}\n")
+        else:
+            body.append(f"    \u2014  n/a\n", style=C_DIM)
+    elif kaggle_path and not active_acc:
+        body.append(f"\n  Quota: [dim]no active account[/]\n")
+    body.append("\n")
+
+    # ── Recommendations ───────────────────────────────────────
+    recs: list[str] = []
+    if not rc_ok:
+        recs.append(f"[bold]kagitch init[/]     install shell wrapper")
+    elif not rc_current:
+        recs.append(f"[bold]source {rc}[/] or [bold]kagitch init -r[/]   reload shell wrapper")
+    if not kaggle_path:
+        recs.append(f"[bold]pip install kaggle[/]   install Kaggle CLI")
+    recs.append(f"[bold]kagitch check[/]       detailed quota check for all accounts")
+
+    if recs:
+        body.append(f"  Recommendations:\n", style="bold")
+        for r in recs:
+            body.append(f"    \u2192  {r}\n")
 
     console.print(panel_body("[bold]kagitch doctor[/]", body, C_INFO))
-    return 0
+    return exit_code
 
 
 def cmd_add(config: dict, args: list[str]) -> int:
@@ -582,7 +652,7 @@ def cmd_init(args: list[str] | None = None) -> int:
     console.print(f"  Adding shell integration to: {rc}")
     rc.parent.mkdir(parents=True, exist_ok=True)
     with open(rc, "a") as f:
-        f.write(f"\n# kagitch shell integration\n{eval_line}\n")
+        f.write(f"\n# kagitch shell integration v{__version__}\n{eval_line}\n")
     console.print()
     console.print(ok("Done!"))
 
