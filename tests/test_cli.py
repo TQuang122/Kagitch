@@ -421,7 +421,7 @@ class TestDoctor:
         """doctor runs and shows all sections with accounts."""
         tmp_path, _ = temp_env
         rc_file = tmp_path / ".zshrc"
-        rc_file.write_text('# kagitch shell integration v1.0.0\neval "$(kagitch shellpath zsh)"\n')
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
         monkeypatch.setattr("kaggle_switch.cli.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.cli.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
@@ -433,7 +433,6 @@ class TestDoctor:
         }
         cfg.save_config(config)
 
-        # Ensure .kaggle dir exists
         kaggle_dir = tmp_path / ".kaggle"
         kaggle_dir.mkdir(exist_ok=True)
 
@@ -441,8 +440,7 @@ class TestDoctor:
         assert rc == 0
         assert "Kaggle CLI" in out
         assert "Shell wrapper" in out
-        assert "Shell version" in out
-        assert "v1.0.0" in out
+        assert "Config dir" in out
         assert "alpha" in out
         assert "beta" in out
         assert "Accounts" in out
@@ -462,11 +460,11 @@ class TestDoctor:
         assert "not installed" in out
         assert "No accounts" in out
 
-    def test_doctor_stale_wrapper(self, temp_env, capsys, monkeypatch):
-        """doctor warns when rc file has outdated version marker."""
+    def test_doctor_suggests_reload(self, temp_env, capsys, monkeypatch):
+        """doctor shows reload hint when wrapper is installed."""
         tmp_path, _ = temp_env
         rc_file = tmp_path / ".zshrc"
-        rc_file.write_text('# kagitch shell integration v0.9.0\neval "$(kagitch shellpath zsh)"\n')
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
         monkeypatch.setattr("kaggle_switch.cli.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.cli.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
@@ -478,9 +476,8 @@ class TestDoctor:
         kaggle_dir.mkdir(exist_ok=True)
 
         rc, out = run_cli("doctor", capsys=capsys)
-        assert rc == 1  # stale wrapper sets non-zero
-        assert "outdated" in out
-        assert "source" in out
+        assert rc == 0
+        assert "reload wrapper" in out
         assert "kagitch init -r" in out
 
     def test_doctor_suggests_init(self, temp_env, capsys, monkeypatch):

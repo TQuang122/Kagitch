@@ -387,7 +387,6 @@ def _render_quota(hours_str: str) -> str:
 
 
 def cmd_doctor(config: dict) -> int:
-    from . import __version__
     from .checker import check_account
 
     shell = detect_shell()
@@ -396,48 +395,34 @@ def cmd_doctor(config: dict) -> int:
     accounts = get_accounts(config)
     active_num = current_active(config)
     rc_ok = False
-    rc_current = False
-    version_marker = f"# kagitch shell integration v{__version__}"
 
     if rc and rc.exists():
         content = rc.read_text()
         rc_ok = "kagitch" in content and "shellpath" in content
-        rc_current = version_marker in content
 
     exit_code = 0
     body = Text()
 
-    # ── Checks ────────────────────────────────────────────────
     def _line(icon: str, style: str, label: str, detail: str, detail_style: str = C_DIM) -> None:
         body.append(f"  {icon}  {label:<18}", style=style)
         body.append(detail, style=detail_style)
         body.append("\n")
 
-    # 1. Kaggle CLI
+    # 1 — Kaggle CLI
     if kaggle_path:
         _line("\u2713", C_OK, "Kaggle CLI", kaggle_path)
     else:
         exit_code = 1
         _line("\u2717", C_ERROR, "Kaggle CLI", "not found \u2014 pip install kaggle")
 
-    # 2. Shell wrapper installed
+    # 2 — Shell wrapper installed
     if rc_ok:
         _line("\u2713", C_OK, "Shell wrapper", str(rc) if rc else shell)
     else:
         exit_code = 1
         _line("\u2717", C_ERROR, "Shell wrapper", "not installed \u2014 kagitch init")
 
-    # 3. Shell wrapper current?
-    if rc_ok:
-        if rc_current:
-            _line("\u2713", C_OK, "Shell version", f"v{__version__}")
-        else:
-            exit_code = 1
-            _line("\u26a0", C_WARN, "Shell version", f"outdated \u2014 source {rc} or kagitch init -r")
-    else:
-        _line("\u2014", C_DIM, "Shell version", "n/a (not installed)")
-
-    # 4. Config dir accessible
+    # 3 — Config dir accessible
     config_dir = Path.home() / ".kaggle"
     if config_dir.is_dir() and os.access(config_dir, os.R_OK):
         _line("\u2713", C_OK, "Config dir", str(config_dir))
@@ -446,7 +431,7 @@ def cmd_doctor(config: dict) -> int:
     else:
         _line("\u2014", C_DIM, "Config dir", "not created yet (will be on first use)")
 
-    # 5. OAuth creds path
+    # 4 — OAuth creds path
     creds = config_dir / "credentials.json"
     if creds.exists():
         if os.access(creds, os.R_OK):
@@ -457,7 +442,7 @@ def cmd_doctor(config: dict) -> int:
     else:
         _line("\u2014", C_DIM, "OAuth creds", "none present (created on OAuth login)")
 
-    # 6. Active account
+    # 5 — Active account
     active_acc = None
     if active_num:
         active_acc = find_account(config, str(active_num))
@@ -515,16 +500,16 @@ def cmd_doctor(config: dict) -> int:
     recs: list[str] = []
     if not rc_ok:
         recs.append(f"[bold]kagitch init[/]     install shell wrapper")
-    elif not rc_current:
-        recs.append(f"[bold]source {rc}[/] or [bold]kagitch init -r[/]   reload shell wrapper")
+    else:
+        reload_cmd = f"[bold]source {rc}[/] or [bold]kagitch init -r[/]"
+        recs.append(f"{reload_cmd}   reload wrapper in current shell")
     if not kaggle_path:
         recs.append(f"[bold]pip install kaggle[/]   install Kaggle CLI")
     recs.append(f"[bold]kagitch check[/]       detailed quota check for all accounts")
 
-    if recs:
-        body.append(f"  Recommendations:\n", style="bold")
-        for r in recs:
-            body.append(f"    \u2192  {r}\n")
+    body.append(f"  Recommendations:\n", style="bold")
+    for r in recs:
+        body.append(f"    \u2192  {r}\n")
 
     console.print(panel_body("[bold]kagitch doctor[/]", body, C_INFO))
     return exit_code
