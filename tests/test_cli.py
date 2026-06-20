@@ -269,8 +269,7 @@ class TestVersion:
     def test_version_flag(self, temp_env, capsys):
         rc, out = run_cli("--version", capsys=capsys)
         assert rc == 0
-        assert "kagitch" in out
-        assert "1.0.0" in out
+        assert "v1.0.0" in out
 
 
 class TestHelp:
