@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import Account, get_accounts, load_config
+from .config import Account, KAGGLE_DEFAULT, get_accounts, load_config
 
 
 # ── Monkey-patch kagglesdk TimeDeltaSerializer ──────────────────
@@ -52,6 +54,33 @@ class CheckResult:
     tpu_remaining: str = ""
     quota_ok: bool = False
     quota_error: str = ""
+
+
+_creds_lock = threading.Lock()
+
+
+def _swap_creds(acc: Account) -> None:
+    creds_dst = KAGGLE_DEFAULT / "credentials.json"
+    creds_src = acc.path / "credentials.json"
+    if creds_src.exists():
+        creds_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(creds_src, creds_dst)
+    elif creds_dst.exists():
+        creds_dst.unlink()
+
+
+def _run_with_creds(cmd: list[str], env: dict[str, str], acc: Account) -> subprocess.CompletedProcess:
+    with _creds_lock:
+        backup = KAGGLE_DEFAULT / "credentials.json"
+        backup_data = backup.read_bytes() if backup.exists() else None
+        try:
+            _swap_creds(acc)
+            return _run_kaggle(cmd, env)
+        finally:
+            if backup_data is not None:
+                backup.write_bytes(backup_data)
+            elif backup.exists():
+                backup.unlink()
 
 
 def _build_env(acc: Account) -> dict[str, str]:
@@ -129,7 +158,7 @@ def check_account(acc: Account) -> CheckResult:
 
     # ── Phase 3: quota check ─────────────────────────────────────
     try:
-        cp = _run_kaggle(["quota"], env)
+        cp = _run_with_creds(["quota"], env, acc)
         if cp.returncode == 0:
             for line in cp.stdout.splitlines():
                 line = line.strip()
