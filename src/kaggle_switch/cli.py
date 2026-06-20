@@ -563,14 +563,14 @@ def cmd_doctor(config: dict) -> int:
             cr = check_account(active_acc)
         body.append(f"\n  Quota ({active_acc.name}):\n", style="")
         if cr.quota_ok:
-            body.append(f"    \u25b6  GPU  {_render_quota(cr.gpu_remaining)}\n")
-            body.append(f"    \u25b6  TPU  {_render_quota(cr.tpu_remaining)}\n")
+            body.append(Text.from_markup(f"    \u25b6  GPU  {_render_quota(cr.gpu_remaining)}\n"))
+            body.append(Text.from_markup(f"    \u25b6  TPU  {_render_quota(cr.tpu_remaining)}\n"))
         elif cr.quota_error:
-            body.append(f"    [{C_ERROR}]\u2717[/]  {cr.quota_error[:80]}\n")
+            body.append(Text.from_markup(f"    [{C_ERROR}]\u2717[/]  {cr.quota_error[:80]}\n"))
         else:
             body.append(f"    \u2014  n/a\n", style=C_DIM)
     elif kaggle_path and not active_acc:
-        body.append(f"\n  Quota: [dim]no active account[/]\n")
+        body.append(Text.from_markup(f"\n  Quota: [dim]no active account[/]\n"))
     body.append("\n")
 
     # ── Recommendations ───────────────────────────────────────
@@ -589,7 +589,7 @@ def cmd_doctor(config: dict) -> int:
 
     body.append(f"  Recommendations:\n", style="bold")
     for r in recs:
-        body.append(f"    \u2192  {r}\n")
+        body.append(Text.from_markup(f"    \u2192  {r}\n"))
 
     console.print(panel_body("[bold]kagitch doctor[/]", body, C_INFO))
     return exit_code

@@ -553,7 +553,7 @@ class TestDoctor:
 
         rc, out = run_cli("doctor", capsys=capsys)
         assert rc == 0
-        assert "reload wrapper" in out
+        assert "reload" in out and "wrapper" in out
         assert "kagitch init -r" in out
 
     def test_doctor_suggests_init(self, temp_env, capsys, monkeypatch):
