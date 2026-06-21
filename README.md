@@ -32,21 +32,26 @@ kagitch add personal  # or: kagitch add personal ~/kaggle.json (legacy key)
 kagitch 2             # switch to account 2
 kagitch check         # check quota for all accounts
 kaggle quota          # kaggle CLI follows the switched account
+kaggle push kernels -p . # # push current folder as a Kaggle kernel
 ```
 
 ```text
 $ kagitch
-╭──────────── Dashboard ────────────╮
-│  Active  #2 work                  │
-│                                    │
-│  Run kagitch switch to choose...   │
-╰────────────────────────────────────╯
-┏━━━┳━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ # ┃ Name     ┃ Auth     ┃ Path           ┃ Status   ┃
-┡━━━╇━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│ 1 │ personal │ No creds │ ~/.kaggle      │          │
-│ 2 │ work     │ OAuth    │ ~/.kaggle-work │ ► active │
-└───┴──────────┴──────────┴────────────────┴──────────┘
+
+╭─────────────────── Dashboard ───────────────────╮
+│   Active  #1 account1                           │
+│                                                 │
+│   Run kagitch switch to choose another account. │
+╰─────────────────────────────────────────────────╯
+┏━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃   # ┃ Name         ┃  Auth    ┃ Path                         ┃ Status   ┃
+┡━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
+│   1 │ account1     │   OAuth  │  ~/.kaggle-account1          │ ● active │
+│   2 │ account2     │   OAuth  │  ~/.kaggle-account2          │          │
+│   3 │ account3     │   OAuth  │  ~/.kaggle-account3          │          │
+└─────┴──────────────┴──────────┴──────────────────────────────┴──────────┘
+
+
 ```
 
 ---
