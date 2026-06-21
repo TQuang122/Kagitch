@@ -383,20 +383,26 @@ def cmd_switch(config: dict, key: str) -> int:
 
     am = _auth_method(acc.path)
     am_display = _render_auth(am)
-    arrow = "\u25b6"
+    username = _active_username_from_account(acc)
+
     lines = [
-        f"  [bold]{acc.name}[/]  ({am_display})",
-        "",
-        f"  [{C_INFO}]{arrow}[/]  {acc.path}",
+        f"  {am_display}  [bold]{acc.name}[/]",
     ]
+    if username:
+        lines.append(f"  [dim]{acc.path}[/]  [cyan]{username}[/]")
+    else:
+        lines.append(f"  [dim]{acc.path}[/]")
+
+    if not machine_mode:
+        patch_line = _auto_patch_metadata(Path.cwd(), username) if username else None
+        if patch_line:
+            lines.append("")
+            lines.append(patch_line)
+
     if machine_mode:
         print(f"  Switched to #{acc.number}: {acc.name}", file=sys.stderr)
     else:
         console.print(card(lines, title=f"#{acc.number} Switched"))
-
-    username = _active_username_from_account(acc)
-    if username:
-        _auto_patch_metadata(Path.cwd(), username)
 
     return 0
 
@@ -414,12 +420,13 @@ def cmd_switch_prompt(config: dict) -> int:
         # instead of being buffered inside the wrapper's $() capture.
         try:
             with open("/dev/tty", "w") as tty:
-                tty.write("Select account\n")
+                tty.write("Kagitch Accounts\n")
                 for acc in accounts:
+                    badge = _render_auth(_auth_method(acc.path))
                     marker = " [active]" if acc.number == active else ""
-                    tty.write(f"  {acc.number}. {acc.name}{marker}\n")
+                    tty.write(f"  {acc.number}. {acc.name}{marker}  ({badge})\n")
                 p = str(active or accounts[0].number)
-                tty.write(f"Select account ({p}): ")
+                tty.write(f"Select account [{p}]: ")
         except OSError:
             pass
         try:
@@ -430,10 +437,12 @@ def cmd_switch_prompt(config: dict) -> int:
             return 1
         choice = choice.strip() or str(active or accounts[0].number)
     else:
-        console.print("[bold]Select account[/]")
+        rows: list[str] = []
         for acc in accounts:
+            badge = _render_auth(_auth_method(acc.path))
             marker = " [active]" if acc.number == active else ""
-            console.print(f"  {acc.number}. {acc.name}{marker}")
+            rows.append(f"  {acc.number}. {acc.name}{marker}  {badge}")
+        console.print(card(rows, title="Kagitch Accounts"))
         try:
             choice = Prompt.ask("Select account", default=active or accounts[0].number)
         except (KeyboardInterrupt, EOFError):
@@ -921,36 +930,45 @@ def cmd_check(config: dict) -> int:
     return 0
 
 
-def _auto_patch_metadata(target: Path, username: str) -> bool:
+def _auto_patch_metadata(target: Path, username: str) -> str | None:
+    """Patch kernel-metadata.json id to new username.
+
+    Returns a Rich-formatted display line if a patch was applied,
+    or ``None`` if nothing changed / no file existed.
+    """
     import json as _json
 
     if target.is_dir():
         target = target / "kernel-metadata.json"
 
     if not target.exists():
-        return True  # nothing to patch is fine
+        return None
 
     try:
         data = _json.loads(target.read_text())
     except (_json.JSONDecodeError, OSError):
-        return False
+        return None
 
     old_id: str | None = data.get("id")
     if not old_id or "/" not in old_id:
-        return True
+        return None
 
     old_user, kernel = old_id.split("/", 1)
     if old_user == username:
-        return True
+        return None
 
     new_id = f"{username}/{kernel}"
     data["id"] = new_id
     try:
         target.write_text(_json.dumps(data, indent=2) + "\n")
     except OSError:
-        return False
-    console.print(f"  [dim]\u21b7[/] [bold]{target.name}[/]: [red]{old_user}[/] \u2192 [green]{username}[/]  /[cyan]{kernel}[/]")
-    return True
+        return None
+
+    return (
+        f"  [dim]\u21b7[/] [bold]{target.name}[/]: "
+        f"[red]{old_user}[/] \u2192 [green]{username}[/]  "
+        f"[/][cyan]{kernel}[/]"
+    )
 
 
 def _active_username(config: dict) -> str | None:
@@ -1021,9 +1039,15 @@ def cmd_patch(config: dict, args: list[str]) -> int:
     if not username:
         console.print(err("Cannot determine active Kaggle username"))
         return 1
-    if not _auto_patch_metadata(target, username):
+    patch_line = _auto_patch_metadata(target, username)
+    if patch_line is None:
         console.print(err(f"Failed to patch {target.name}"))
         return 1
+    console.print(card([
+        ok(f"Patched [bold]{target.name}[/]"),
+        "",
+        patch_line,
+    ], title="kagitch patch"))
     return 0
 
 
@@ -1048,6 +1072,24 @@ def cmd_list_accounts(config: dict) -> int:
     return 0
 
 
+def _git_log(*args: str, cwd: Path) -> str:
+    cp = subprocess.run(
+        ["git", *args],
+        capture_output=True, text=True,
+        cwd=cwd,
+    )
+    return cp.stdout.strip()
+
+
+def _git_head(cwd: Path) -> list[str]:
+    """Get [short_hash, subject] of current HEAD, or ['?','?'] on error."""
+    out = _git_log("log", "-1", "--oneline", cwd=cwd)
+    if not out:
+        return ["?", "?"]
+    parts = out.split(maxsplit=1)
+    return parts if len(parts) == 2 else [parts[0], ""]
+
+
 def cmd_update() -> int:
     """Pull the latest version from git."""
     pkg_dir = Path(__file__).resolve().parent  # src/kaggle_switch/
@@ -1060,15 +1102,17 @@ def cmd_update() -> int:
         console.print("  [green]pip install --upgrade git+https://github.com/TQuang122/Kagitch.git[/]")
         return 1
 
+    old_hash, old_subj = _git_head(cwd=root)
+
     if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
-        console.print("[bold green]Pulling latest version...[/]")
+        console.print(f"[bold]Kagitch {__version__} — updating...[/]")
         cp = subprocess.run(
             ["git", "pull", "--ff-only"],
             capture_output=True, text=True,
             cwd=root,
         )
     else:
-        with console.status("[bold green]Pulling latest version...") as _:
+        with console.status(f"[bold]Kagitch {__version__} — pulling latest...[/]") as _:
             cp = subprocess.run(
                 ["git", "pull", "--ff-only"],
                 capture_output=True, text=True,
@@ -1076,18 +1120,32 @@ def cmd_update() -> int:
             )
 
     if cp.returncode != 0:
-        console.print(err("Update failed:"))
-        console.print(f"  [dim]{cp.stderr.strip()}[/]")
+        console.print(card([
+            err(f"[red]Update failed:[/] {cp.stderr.strip()}"),
+            info("Try checking your network or git remote."),
+        ], title=f"Kagitch v{__version__}"))
         return 1
 
     if "Already up to date" in cp.stdout:
-        console.print(ok("Already up to date."))
+        console.print(card([
+            ok("Already up to date."),
+            f"  [dim]{old_hash} {old_subj}[/]",
+        ], title=f"Kagitch v{__version__}"))
         return 0
 
-    console.print(ok(f"Updated to latest commit."))
-    if cp.stdout.strip():
-        for line in cp.stdout.strip().splitlines():
-            console.print(f"  [dim]{line}[/]")
+    new_hash, new_subj = _git_head(cwd=root)
+    new_commits = _git_log("log", "--oneline", f"{old_hash}..HEAD", cwd=root)
+    num_new = len(new_commits.splitlines()) if new_commits else 0
+
+    lines: list[str] = [
+        ok(f"Updated — [bold]{num_new}[/] new commit{'s' if num_new != 1 else ''}"),
+        f"  [dim]{old_hash} → {new_hash}[/]",
+        "",
+    ]
+    for c in new_commits.splitlines():
+        lines.append(f"  [dim]├─[/] {c}")
+    version_badge = f"v{__version__}"
+    console.print(card(lines, title=f"Kagitch {version_badge}"))
     return 0
 
 
