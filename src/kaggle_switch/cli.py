@@ -964,8 +964,8 @@ def _auto_patch_metadata(target: Path, username: str) -> str | None:
 
     return (
         f"  [dim]\u21b7[/] [bold]{target.name}[/]: "
-        f"[red]{old_user}[/] \u2192 [green]{username}[/]  "
-        f"[/][cyan]{kernel}[/]"
+        f"[red]{old_user}[/] \u2192 [green]{username}[/]"
+        f"  /[cyan]{kernel}[/]"
     )
 
 
