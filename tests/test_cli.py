@@ -169,7 +169,7 @@ class TestSwitch:
         assert rc == 0
         assert "export KAGGLE_CONFIG_DIR=" in out
         assert "unset KAGGLE_API_TOKEN" in out
-        assert "Switched to" in out
+        assert "Switched" in out
 
     def test_switch_default_account(self, temp_env, capsys):
         config = cfg.load_config()

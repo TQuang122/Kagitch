@@ -387,21 +387,23 @@ def cmd_switch(config: dict, key: str) -> int:
 
     patch_line = _auto_patch_metadata(Path.cwd(), username) if username else None
 
-    if machine_mode:
-        print(f"  Switched to #{acc.number}: {acc.name}", file=sys.stderr)
-        if patch_line:
-            print(_plain(patch_line), file=sys.stderr)
+    lines = [
+        f"  {am_display}  [bold]{acc.name}[/]",
+    ]
+    if username:
+        lines.append(f"  [dim]{acc.path}[/]  [cyan]{username}[/]")
     else:
-        lines = [
-            f"  {am_display}  [bold]{acc.name}[/]",
-        ]
-        if username:
-            lines.append(f"  [dim]{acc.path}[/]  [cyan]{username}[/]")
-        else:
-            lines.append(f"  [dim]{acc.path}[/]")
-        if patch_line:
-            lines.append("")
-            lines.append(patch_line)
+        lines.append(f"  [dim]{acc.path}[/]")
+    if patch_line:
+        lines.append("")
+        lines.append(patch_line)
+
+    if machine_mode:
+        from rich.console import Console as _TtyConsole
+        _TtyConsole(file=sys.stderr, force_terminal=True, highlight=False).print(
+            card(lines, title=f"#{acc.number} Switched")
+        )
+    else:
         console.print(card(lines, title=f"#{acc.number} Switched"))
 
     return 0
@@ -416,17 +418,18 @@ def cmd_switch_prompt(config: dict) -> int:
     active = current_active(config)
 
     if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
-        try:
-            with open("/dev/tty", "w") as tty:
-                tty.write("Kagitch Accounts\n")
-                for acc in accounts:
-                    badge = _plain(_render_auth(_auth_method(acc.path)))
-                    marker = " [active]" if acc.number == active else ""
-                    tty.write(f"  {acc.number}. {acc.name}{marker}  {badge}\n")
-                p = str(active or accounts[0].number)
-                tty.write(f"Select account [{p}]: ")
-        except OSError:
-            pass
+        from rich.console import Console as _TtyConsole
+        err_con = _TtyConsole(file=sys.stderr, force_terminal=True, highlight=False)
+        err_con.print("[bold]Kagitch Accounts[/]")
+        for acc in accounts:
+            badge = _render_auth(_auth_method(acc.path))
+            marker = " [active]" if acc.number == active else ""
+            if marker:
+                err_con.print(f"  {acc.number}. {acc.name}  {badge}  [{C_OK}]{marker.strip()}[/]")
+            else:
+                err_con.print(f"  {acc.number}. {acc.name}  {badge}")
+        p = str(active or accounts[0].number)
+        err_con.print(f"Select account [{p}]: ", end="")
         try:
             choice = input()
         except (EOFError, KeyboardInterrupt):
@@ -967,11 +970,6 @@ def _auto_patch_metadata(target: Path, username: str) -> str | None:
         f"[red]{old_user}[/] \u2192 [green]{username}[/]"
         f"  /[cyan]{kernel}[/]"
     )
-
-
-def _plain(text: str) -> str:
-    """Strip Rich markup — returns plain text suitable for raw stderr / tty."""
-    return Text.from_markup(text).plain
 
 
 def _active_username(config: dict) -> str | None:
