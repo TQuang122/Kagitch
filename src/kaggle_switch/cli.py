@@ -354,8 +354,12 @@ def cmd_switch(config: dict, key: str) -> int:
         env_lines.append("unset KAGGLE_CONFIG_DIR")
     else:
         env_lines.append(f"export KAGGLE_CONFIG_DIR={acc.path}")
-    if acc.api_token:
-        env_lines.append(f"export KAGGLE_API_TOKEN={acc.api_token}")
+
+    api_token = acc.api_token
+    if not api_token and acc.auth_type == "oauth":
+        api_token = _refresh_oauth_token(acc.path / "credentials.json")
+    if api_token:
+        env_lines.append(f"export KAGGLE_API_TOKEN={api_token}")
     else:
         env_lines.append("unset KAGGLE_API_TOKEN")
 
@@ -444,6 +448,29 @@ def cmd_switch_prompt(config: dict) -> int:
         console.print(f"  Available: {pairs}")
         return 1
     return cmd_switch(config, choice)
+
+
+def _refresh_oauth_token(creds_path: Path) -> str | None:
+    """Get a fresh OAuth access token from credentials.json.
+
+    The Kaggle CLI authenticate() checks KAGGLE_API_TOKEN before trying
+    OAuth credentials. Setting it bypasses a bug in kaggle==2.2.2 where a
+    trailing ``-v`` flag causes ``_authenticate_with_legacy_apikey()`` to
+    return True without setting credentials, skipping the OAuth flow.
+    """
+    if not creds_path.exists():
+        return None
+    try:
+        from kagglesdk.kaggle_client import KaggleClient
+        from kagglesdk.kaggle_creds import KaggleCredentials
+
+        client = KaggleClient()
+        creds = KaggleCredentials.load(client, str(creds_path))
+        if creds is None:
+            return None
+        return creds.get_access_token()
+    except Exception:
+        return None
 
 
 def _auth_method(path: Path) -> str:
