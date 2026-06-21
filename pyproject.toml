@@ -9,7 +9,7 @@ description = "Kaggle multi-account manager — switch between Kaggle accounts w
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8"
-authors = [{ name = "jky" }]
+authors = [{ name = "TQuang122" }]
 keywords = ["kaggle", "multi-account", "switch", "cli"]
 classifiers = [
     "Environment :: Console",
@@ -34,9 +34,9 @@ dev = ["pytest>=7.0", "pytest-cov"]
 kagitch = "kaggle_switch.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/jky/kagitch"
-Repository = "https://github.com/jky/kagitch"
-Issues = "https://github.com/jky/kagitch/issues"
+Homepage = "https://github.com/TQuang122/Kagitch"
+Repository = "https://github.com/TQuang122/Kagitch"
+Issues = "https://github.com/TQuang122/Kagitch/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kaggle_switch"]
