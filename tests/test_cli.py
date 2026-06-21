@@ -1,5 +1,6 @@
 """Tests for CLI module."""
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -23,12 +24,15 @@ def temp_env(tmp_path, monkeypatch):
     return tmp_path, kaggle_json
 
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
 def run_cli(*args, capsys) -> tuple[int, str]:
     """Run CLI with args, return (returncode, stdout)."""
     with patch.object(sys, "argv", ["kagitch"] + list(args)):
         rc = cli.main()
     captured = capsys.readouterr()
-    return rc, captured.out + captured.err
+    return rc, _ANSI_RE.sub("", captured.out + captured.err)
 
 
 class TestList:

@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.text import Text
 
 # ── Console ────────────────────────────────────────────────────
-console = Console()
+console = Console(force_terminal=True)
 
 # ── Color theme ─────────────────────────────────────────────────
 C_INFO = "cyan"

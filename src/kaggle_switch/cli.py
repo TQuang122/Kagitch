@@ -252,8 +252,12 @@ def cmd_current(config: dict) -> int:
     am = _auth_method(acc.path)
     am_display = _render_auth(am)
 
-    with console.status("[bold green]Checking quota...", spinner="dots") as _:
+    if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
+        console.print("[bold green]Checking quota...[/]")
         all_results = check_all_accounts(config)
+    else:
+        with console.status("[bold green]Checking quota...", spinner="dots") as _:
+            all_results = check_all_accounts(config)
     cur = next((r for r in all_results if r.number == acc.number), None)
 
     lines = [
@@ -566,8 +570,13 @@ def cmd_doctor(config: dict) -> int:
 
     # ── Quota check for active account ────────────────────────
     if kaggle_path and active_acc:
-        with console.status("[bold green]Checking quota...", spinner="dots") as _:
+        _machine = os.environ.get("KAGITCH_SHELL_WRAPPER") == "1"
+        if _machine:
+            console.print("[bold green]Checking quota...[/]")
             cr = check_account(active_acc)
+        else:
+            with console.status("[bold green]Checking quota...", spinner="dots") as _:
+                cr = check_account(active_acc)
         body.append(f"\n  Quota ({active_acc.name}):\n", style="")
         if cr.quota_ok:
             body.append(Text.from_markup(f"    \u25b6  GPU  {_render_quota(cr.gpu_remaining)}\n"))
@@ -759,8 +768,12 @@ def cmd_check(config: dict) -> int:
 
     results: list = []
 
-    with console.status("[bold green]Checking accounts...", spinner="dots") as _:
+    if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
+        console.print("[bold green]Checking accounts...[/]")
         results = check_all_accounts(config)
+    else:
+        with console.status("[bold green]Checking accounts...", spinner="dots") as _:
+            results = check_all_accounts(config)
 
     active_num = current_active(config)
     headers = ["#", "Account", "Auth", "GPU", "TPU", "Status"]
@@ -977,12 +990,20 @@ def cmd_update() -> int:
         console.print("  [green]pip install --upgrade git+https://github.com/TQuang122/Kagitch.git[/]")
         return 1
 
-    with console.status("[bold green]Pulling latest version...") as _:
+    if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
+        console.print("[bold green]Pulling latest version...[/]")
         cp = subprocess.run(
             ["git", "pull", "--ff-only"],
             capture_output=True, text=True,
             cwd=root,
         )
+    else:
+        with console.status("[bold green]Pulling latest version...") as _:
+            cp = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                capture_output=True, text=True,
+                cwd=root,
+            )
 
     if cp.returncode != 0:
         console.print(err("Update failed:"))
