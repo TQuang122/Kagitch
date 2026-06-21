@@ -430,6 +430,7 @@ def cmd_switch_prompt(config: dict) -> int:
                 err_con.print(f"  {acc.number}. {acc.name}  {badge}")
         p = str(active or accounts[0].number)
         err_con.print(f"Select account [{p}]: ", end="")
+        sys.stderr.flush()
         try:
             choice = input()
         except (EOFError, KeyboardInterrupt):
