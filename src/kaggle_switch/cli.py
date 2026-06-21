@@ -390,7 +390,7 @@ def cmd_switch(config: dict, key: str) -> int:
     if machine_mode:
         print(f"  Switched to #{acc.number}: {acc.name}", file=sys.stderr)
         if patch_line:
-            print(patch_line, file=sys.stderr)
+            print(_plain(patch_line), file=sys.stderr)
     else:
         lines = [
             f"  {am_display}  [bold]{acc.name}[/]",
@@ -417,23 +417,16 @@ def cmd_switch_prompt(config: dict) -> int:
 
     if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
         try:
-            tty_file = open("/dev/tty", "w")
+            with open("/dev/tty", "w") as tty:
+                tty.write("Kagitch Accounts\n")
+                for acc in accounts:
+                    badge = _plain(_render_auth(_auth_method(acc.path)))
+                    marker = " [active]" if acc.number == active else ""
+                    tty.write(f"  {acc.number}. {acc.name}{marker}  {badge}\n")
+                p = str(active or accounts[0].number)
+                tty.write(f"Select account [{p}]: ")
         except OSError:
-            tty_file = None
-        if tty_file:
-            from rich.console import Console as _RichConsole
-            tty_console = _RichConsole(file=tty_file, force_terminal=True, highlight=False)
-            tty_console.print("[bold]Kagitch Accounts[/]")
-            for acc in accounts:
-                badge = _render_auth(_auth_method(acc.path))
-                marker = " [active]" if acc.number == active else ""
-                if marker:
-                    tty_console.print(f"  {acc.number}. {acc.name}  {badge}  [{C_OK}]{marker.strip()}[/]")
-                else:
-                    tty_console.print(f"  {acc.number}. {acc.name}  {badge}")
-            p = str(active or accounts[0].number)
-            tty_console.print(f"Select account [{p}]: ", end="")
-            tty_file.close()
+            pass
         try:
             choice = input()
         except (EOFError, KeyboardInterrupt):
@@ -974,6 +967,11 @@ def _auto_patch_metadata(target: Path, username: str) -> str | None:
         f"[red]{old_user}[/] \u2192 [green]{username}[/]  "
         f"[/][cyan]{kernel}[/]"
     )
+
+
+def _plain(text: str) -> str:
+    """Strip Rich markup — returns plain text suitable for raw stderr / tty."""
+    return Text.from_markup(text).plain
 
 
 def _active_username(config: dict) -> str | None:
