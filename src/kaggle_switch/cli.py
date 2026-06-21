@@ -385,23 +385,23 @@ def cmd_switch(config: dict, key: str) -> int:
     am_display = _render_auth(am)
     username = _active_username_from_account(acc)
 
-    lines = [
-        f"  {am_display}  [bold]{acc.name}[/]",
-    ]
-    if username:
-        lines.append(f"  [dim]{acc.path}[/]  [cyan]{username}[/]")
-    else:
-        lines.append(f"  [dim]{acc.path}[/]")
-
-    if not machine_mode:
-        patch_line = _auto_patch_metadata(Path.cwd(), username) if username else None
-        if patch_line:
-            lines.append("")
-            lines.append(patch_line)
+    patch_line = _auto_patch_metadata(Path.cwd(), username) if username else None
 
     if machine_mode:
         print(f"  Switched to #{acc.number}: {acc.name}", file=sys.stderr)
+        if patch_line:
+            print(patch_line, file=sys.stderr)
     else:
+        lines = [
+            f"  {am_display}  [bold]{acc.name}[/]",
+        ]
+        if username:
+            lines.append(f"  [dim]{acc.path}[/]  [cyan]{username}[/]")
+        else:
+            lines.append(f"  [dim]{acc.path}[/]")
+        if patch_line:
+            lines.append("")
+            lines.append(patch_line)
         console.print(card(lines, title=f"#{acc.number} Switched"))
 
     return 0
@@ -416,19 +416,24 @@ def cmd_switch_prompt(config: dict) -> int:
     active = current_active(config)
 
     if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
-        # Write directly to the terminal so the prompt is visible immediately
-        # instead of being buffered inside the wrapper's $() capture.
         try:
-            with open("/dev/tty", "w") as tty:
-                tty.write("Kagitch Accounts\n")
-                for acc in accounts:
-                    badge = _render_auth(_auth_method(acc.path))
-                    marker = " [active]" if acc.number == active else ""
-                    tty.write(f"  {acc.number}. {acc.name}{marker}  ({badge})\n")
-                p = str(active or accounts[0].number)
-                tty.write(f"Select account [{p}]: ")
+            tty_file = open("/dev/tty", "w")
         except OSError:
-            pass
+            tty_file = None
+        if tty_file:
+            from rich.console import Console as _RichConsole
+            tty_console = _RichConsole(file=tty_file, force_terminal=True, highlight=False)
+            tty_console.print("[bold]Kagitch Accounts[/]")
+            for acc in accounts:
+                badge = _render_auth(_auth_method(acc.path))
+                marker = " [active]" if acc.number == active else ""
+                if marker:
+                    tty_console.print(f"  {acc.number}. {acc.name}  {badge}  [{C_OK}]{marker.strip()}[/]")
+                else:
+                    tty_console.print(f"  {acc.number}. {acc.name}  {badge}")
+            p = str(active or accounts[0].number)
+            tty_console.print(f"Select account [{p}]: ", end="")
+            tty_file.close()
         try:
             choice = input()
         except (EOFError, KeyboardInterrupt):
