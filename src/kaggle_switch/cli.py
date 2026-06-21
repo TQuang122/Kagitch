@@ -6,8 +6,10 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
+from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
@@ -51,6 +53,25 @@ from .style import (
     rule,
     warn,
 )
+
+
+@contextmanager
+def _tty_status(msg: str):
+    """Rich live status via /dev/tty, for wrapper mode. Falls back silently."""
+    f = None
+    try:
+        f = open("/dev/tty", "w")
+        tc = Console(file=f, force_terminal=True)
+        with tc.status(msg, spinner="dots"):
+            yield
+    except OSError:
+        yield
+    finally:
+        if f:
+            try:
+                f.close()
+            except Exception:
+                pass
 
 
 def _parse_hex(hex: str) -> tuple[int, int, int]:
@@ -253,8 +274,8 @@ def cmd_current(config: dict) -> int:
     am_display = _render_auth(am)
 
     if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
-        console.print("[bold green]Checking quota...[/]")
-        all_results = check_all_accounts(config)
+        with _tty_status("[bold green]Checking quota..."):
+            all_results = check_all_accounts(config)
     else:
         with console.status("[bold green]Checking quota...", spinner="dots") as _:
             all_results = check_all_accounts(config)
@@ -382,18 +403,40 @@ def cmd_switch_prompt(config: dict) -> int:
         console.print(err("No accounts configured — use [bold]kagitch add <name>[/]"))
         return 1
 
-    console.print("[bold]Select account[/]")
     active = current_active(config)
-    for acc in accounts:
-        marker = " [active]" if acc.number == active else ""
-        console.print(f"  {acc.number}. {acc.name}{marker}")
 
-    try:
-        choice = Prompt.ask("Select account", default=active or accounts[0].number)
-    except (KeyboardInterrupt, EOFError):
-        console.print()
-        console.print(info("Cancelled."))
-        return 1
+    if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
+        # Write directly to the terminal so the prompt is visible immediately
+        # instead of being buffered inside the wrapper's $() capture.
+        try:
+            with open("/dev/tty", "w") as tty:
+                tty.write("Select account\n")
+                for acc in accounts:
+                    marker = " [active]" if acc.number == active else ""
+                    tty.write(f"  {acc.number}. {acc.name}{marker}\n")
+                p = str(active or accounts[0].number)
+                tty.write(f"Select account ({p}): ")
+        except OSError:
+            pass
+        try:
+            choice = input()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            console.print(info("Cancelled."))
+            return 1
+        choice = choice.strip() or str(active or accounts[0].number)
+    else:
+        console.print("[bold]Select account[/]")
+        for acc in accounts:
+            marker = " [active]" if acc.number == active else ""
+            console.print(f"  {acc.number}. {acc.name}{marker}")
+        try:
+            choice = Prompt.ask("Select account", default=active or accounts[0].number)
+        except (KeyboardInterrupt, EOFError):
+            console.print()
+            console.print(info("Cancelled."))
+            return 1
+
     console.print()
     if find_account(config, choice) is None:
         pairs = ", ".join(f"{a.number} ({a.name})" for a in accounts)
@@ -572,8 +615,8 @@ def cmd_doctor(config: dict) -> int:
     if kaggle_path and active_acc:
         _machine = os.environ.get("KAGITCH_SHELL_WRAPPER") == "1"
         if _machine:
-            console.print("[bold green]Checking quota...[/]")
-            cr = check_account(active_acc)
+            with _tty_status("[bold green]Checking quota..."):
+                cr = check_account(active_acc)
         else:
             with console.status("[bold green]Checking quota...", spinner="dots") as _:
                 cr = check_account(active_acc)
@@ -769,8 +812,8 @@ def cmd_check(config: dict) -> int:
     results: list = []
 
     if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
-        console.print("[bold green]Checking accounts...[/]")
-        results = check_all_accounts(config)
+        with _tty_status("[bold green]Checking accounts..."):
+            results = check_all_accounts(config)
     else:
         with console.status("[bold green]Checking accounts...", spinner="dots") as _:
             results = check_all_accounts(config)
