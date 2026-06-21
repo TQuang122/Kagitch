@@ -214,7 +214,7 @@ def cmd_list(config: dict) -> int:
     rows: list[list[str]] = []
     active_idx: int | None = None
     for i, acc in enumerate(accounts):
-        status = "\u25cf active" if acc.number == active else ""
+        status = "\u25ba active" if acc.number == active else ""
         if acc.number == active:
             active_idx = i
         rows.append([str(acc.number), acc.name, str(acc.path), status])
@@ -249,7 +249,7 @@ def cmd_dashboard(config: dict) -> int:
             acc.name,
             f"[{C_DIM}]No creds[/]" if auth == "No creds" else _render_auth(auth),
             str(acc.path),
-            "● active" if acc.number == active else "",
+            "\u25ba active" if acc.number == active else "",
         ])
 
     col_opts = {0: {"justify": "right", "width": 3}, 2: {"justify": "center"}}
@@ -591,7 +591,7 @@ def cmd_doctor(config: dict) -> int:
             is_active = acc.number == active_num
             am = _auth_method(acc.path)
             if is_active:
-                body.append("  \u25cf ", style=C_OK)
+                body.append("  \u25ba ", style=C_OK)
             else:
                 body.append("    ")
             body.append(f"#{acc.number} ", style="bold")
@@ -835,7 +835,7 @@ def cmd_check(config: dict) -> int:
         else:
             gpu = f"[{C_DIM}]n/a[/]"
             tpu = f"[{C_DIM}]n/a[/]"
-        status = "[bold green]\u25cf active[/]" if r.number == active_num else ""
+        status = "[bold green]\u25ba active[/]" if r.number == active_num else ""
         if r.number == active_num:
             active_idx = len(rows)
         rows.append([r.number, r.name, auth_cell, gpu, tpu, status])
