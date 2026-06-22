@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaggle_switch.checker import check_account, check_all_accounts, CheckResult
+from kaggle_switch.checker import _build_env, check_account, check_all_accounts, CheckResult
 from kaggle_switch.config import Account
 
 
@@ -164,3 +164,51 @@ class TestCheckAllAccounts:
         config = {"accounts": {}}
         results = check_all_accounts(config)
         assert results == []
+
+
+class TestBuildEnv:
+    """_build_env must isolate the kaggle subprocess from shell env leakage."""
+
+    def test_strips_kaggle_api_token(self, monkeypatch):
+        """KAGGLE_API_TOKEN set by `kagitch switch` in parent shell must NOT
+        leak into the subprocess env, otherwise kaggle CLI 2.2+ uses it for
+        every account and bypasses per-account credential isolation."""
+        monkeypatch.setenv("KAGGLE_API_TOKEN", "KGAT_stale_token_from_switch")
+        acc = Account(number="1", name="a", config_dir="a")
+        env = _build_env(acc)
+        assert "KAGGLE_API_TOKEN" not in env
+
+    def test_sets_kaggle_config_dir_for_non_default(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        acc_path = tmp_path / ".kaggle-testuser"
+        acc_path.mkdir(parents=True)
+        (acc_path / "kaggle.json").write_text('{"username":"testuser","key":"k"}')
+
+        acc = Account(number="1", name="testuser", config_dir="testuser")
+        env = _build_env(acc)
+        assert env.get("KAGGLE_CONFIG_DIR") == str(acc_path)
+
+    def test_clears_kaggle_config_dir_for_default(self, monkeypatch, tmp_path):
+        """Default account must NOT inherit KAGGLE_CONFIG_DIR from shell —
+        it would point at another account's directory and confuse kaggle CLI."""
+        monkeypatch.setenv("KAGGLE_CONFIG_DIR", "/some/other/account/dir")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / ".kaggle").mkdir(parents=True)
+
+        acc = Account(number="1", name="default", config_dir="")
+        env = _build_env(acc)
+        assert "KAGGLE_CONFIG_DIR" not in env
+
+    def test_does_not_drop_unrelated_env_vars(self, monkeypatch):
+        """Sanity check: the strip only targets KAGGLE_API_TOKEN,
+        other env vars must still pass through."""
+        monkeypatch.setenv("KAGGLE_API_TOKEN", "KGAT_x")
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+        monkeypatch.setenv("HOME", "/home/user")
+
+        acc = Account(number="1", name="a", config_dir="a")
+        env = _build_env(acc)
+        assert env.get("PATH") == "/usr/bin:/bin"
+        assert env.get("HOME") == "/home/user"
+        assert "KAGGLE_API_TOKEN" not in env

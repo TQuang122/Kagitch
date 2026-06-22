@@ -84,8 +84,16 @@ def _run_with_creds(cmd: list[str], env: dict[str, str], acc: Account) -> subpro
 
 
 def _build_env(acc: Account) -> dict[str, str]:
-    """Build environment with KAGGLE_CONFIG_DIR set for the given account."""
+    """Build env for kaggle subprocess.
+
+    Strips KAGGLE_API_TOKEN so the subprocess authenticates from
+    credentials.json (the swap target) instead of a possibly-stale
+    shell env var set by a previous `kagitch switch`. Without this
+    strip, kaggle CLI 2.2+ uses the env var token for every account,
+    bypassing per-account credential isolation entirely.
+    """
     env = os.environ.copy()
+    env.pop("KAGGLE_API_TOKEN", None)
     if acc.is_default:
         env.pop("KAGGLE_CONFIG_DIR", None)
     else:
