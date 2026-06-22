@@ -513,6 +513,8 @@ def _render_auth(method: str, ok: bool = True) -> str:
     m = method.upper().replace(" ", "_").rstrip("_")
     if m in ("OAUTH",):
         return f"[{C_OK}]\u2713[/] OAuth"
+    if m in ("ACCESS_TOKEN", "TOKEN"):
+        return f"[{C_OK}]\u2713[/] Token"
     if m in ("LEGACY_API_KEY", "LEGACY_KEY", "LEGACY"):
         return f"[{C_WARN}]\u26a0[/] Legacy Key"
     if method and method != "No creds":

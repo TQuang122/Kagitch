@@ -153,8 +153,10 @@ def check_account(acc: Account) -> CheckResult:
         result.file_error = "no credentials found"
 
     # ── Phase 2: auth check via kaggle config view ───────────────
+    # Use _run_with_creds so the correct account's credentials are active,
+    # otherwise kaggle CLI 2.2+ ignores KAGGLE_CONFIG_DIR for OAuth lookups.
     try:
-        cp = _run_kaggle(["config", "view"], env)
+        cp = _run_with_creds(["config", "view"], env, acc)
         if cp.returncode == 0:
             for line in cp.stdout.splitlines():
                 line = line.strip()
@@ -169,7 +171,9 @@ def check_account(acc: Account) -> CheckResult:
         return result
 
     if creds_file.exists():
-        result.auth_match = True  # OAuth — credentials.json is present and API responded
+        # OAuth — credentials.json exists and config view responded
+        if result.auth_method:
+            result.auth_match = True
     else:
         result.auth_match = result.auth_user == acc.name
 
