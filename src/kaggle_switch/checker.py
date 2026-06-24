@@ -52,6 +52,7 @@ class CheckResult:
     auth_match: bool = False
     gpu_remaining: str = ""
     tpu_remaining: str = ""
+    quota_refresh: str = ""
     quota_ok: bool = False
     quota_error: str = ""
 
@@ -191,7 +192,7 @@ def check_account(acc: Account) -> CheckResult:
         if cp.returncode == 0:
             for line in cp.stdout.splitlines():
                 line = line.strip()
-                # Parse: "GPU       25.87h  4.13h      30.00h  ..."
+                # Parse: "GPU  25.87h  4.13h  30.00h  2026-06-27T00:00:00"
                 if line.startswith("GPU") or line.startswith("TPU"):
                     parts = line.split()
                     if len(parts) >= 3:
@@ -201,6 +202,8 @@ def check_account(acc: Account) -> CheckResult:
                             result.gpu_remaining = remaining
                         elif resource == "TPU":
                             result.tpu_remaining = remaining
+                    if len(parts) >= 5 and not result.quota_refresh:
+                        result.quota_refresh = parts[4]
             result.quota_ok = True
         else:
             result.quota_error = cp.stderr[:200] if cp.stderr else f"exit code {cp.returncode}"

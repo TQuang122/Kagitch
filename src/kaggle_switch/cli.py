@@ -859,7 +859,7 @@ def cmd_check(config: dict) -> int:
             results = check_all_accounts(config)
 
     active_num = current_active(config)
-    headers = ["#", "Account", "Auth", "GPU", "TPU", "Status"]
+    headers = ["#", "Account", "Auth", "GPU", "TPU", "Reset", "Status"]
     rows: list[list[str]] = []
     active_idx: int | None = None
     for r in results:
@@ -875,10 +875,11 @@ def cmd_check(config: dict) -> int:
         else:
             gpu = f"[{C_DIM}]n/a[/]"
             tpu = f"[{C_DIM}]n/a[/]"
+        refresh = r.quota_refresh[:10] if r.quota_refresh else ""
         status = "[bold green]\u25ba active[/]" if r.number == active_num else ""
         if r.number == active_num:
             active_idx = len(rows)
-        rows.append([r.number, r.name, auth_cell, gpu, tpu, status])
+        rows.append([r.number, r.name, auth_cell, gpu, tpu, refresh, status])
 
     if results:
         col_opts = {
@@ -886,7 +887,8 @@ def cmd_check(config: dict) -> int:
             2: {"justify": "center"},
             3: {"justify": "right"},
             4: {"justify": "right"},
-            5: {"justify": "center"},
+            5: {"justify": "center", "width": 12},
+            6: {"justify": "center"},
         }
         console.print()
         console.print(bordered_table(headers, rows, active_index=active_idx, column_options=col_opts))
