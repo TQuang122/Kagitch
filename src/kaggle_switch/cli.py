@@ -149,7 +149,7 @@ def render_help() -> None:
                 ("kagitch patch [path]", "Patch kernel-metadata.json id"),
             ],
             "Shell integration": [
-                ("kagitch init [-r]", "Auto-install shell integration"),
+                ("kagitch init [-r]", "Interactive setup wizard (7-step)"),
                 ("kagitch shellpath <shell>", "Print shell function"),
                 ("kagitch completions <shell>", "Print shell completion script"),
             ],
@@ -791,43 +791,44 @@ def cmd_init(args: list[str] | None = None) -> int:
             if a in ("--reload", "-r"):
                 reload_shell = True
 
-    shell = detect_shell()
-    rc = rc_file_for_shell(shell)
-    if rc is None:
-        console.print(err(f"Cannot detect rc file for shell: {shell}"))
-        return 1
-
-    eval_line = eval_line_for_shell(shell)
-
-    if rc.exists():
-        content = rc.read_text()
-        if "kagitch" in content and "shellpath" in content:
-            console.print(f"[{C_INFO}]\u25b6[/] Shell integration already exists in {rc}")
-            if reload_shell:
+    if reload_shell:
+        shell = detect_shell()
+        rc = rc_file_for_shell(shell)
+        if rc and rc.exists():
+            content = rc.read_text()
+            if "kagitch" in content and "shellpath" in content:
+                console.print(f"[{C_INFO}]\u25b6[/] Shell integration already exists in {rc}")
                 _reload(shell)
                 return 0
-            if shell == "powershell":
-                console.print(f"  Restart your PowerShell session or run: [bold]. {rc}[/]")
-            else:
-                console.print(f"  Restart your shell or run: [bold]source {rc}[/]")
-            return 0
+        console.print(err("No existing shell integration found. Run [bold]kagitch init[/] first."))
+        return 1
 
-    console.print(f"[{C_INFO}]\u25b6[/] Detected shell: {shell}")
-    console.print(f"  Adding shell integration to: {rc}")
-    rc.parent.mkdir(parents=True, exist_ok=True)
-    with open(rc, "a") as f:
-        f.write(f"\n# kagitch shell integration v{__version__}\n{eval_line}\n")
-    console.print()
-    console.print(ok("Done!"))
+    # Shell wrapper captures 2>&1 → interactive wizard output would be
+    # invisible.  Open /dev/tty directly to bypass the capture.
+    if os.environ.get("KAGITCH_SHELL_WRAPPER"):
+        try:
+            tty = open("/dev/tty", "w")
+        except OSError:
+            tty = None
+        if tty:
+            # Ensure every write hits the terminal before reading stdin —
+            # Rich prompts don't end with newlines before input.
+            class _Flush:
+                def __init__(self, f):
+                    self.f = f
+                def write(self, s):
+                    self.f.write(s)
+                    self.f.flush()
+                def flush(self):
+                    self.f.flush()
+            tty_con = Console(file=_Flush(tty), force_terminal=True, highlight=False)
+            from .init_wizard import run_wizard
+            rc = run_wizard(con=tty_con)
+            tty.close()
+            return rc
 
-    if reload_shell:
-        _reload(shell)
-    else:
-        if shell == "powershell":
-            console.print(f"  Restart PowerShell or run: [bold]. {rc}[/]")
-        else:
-            console.print(f"  Restart your shell or run: [bold]source {rc}[/]")
-    return 0
+    from .init_wizard import run_wizard
+    return run_wizard()
 
 
 def _reload(shell: str) -> None:

@@ -13,7 +13,7 @@
 
 ```bash
 pip install git+https://github.com/TQuang122/Kagitch.git
-kagitch init -r  # shell integration (one time)
+kagitch init        # interactive setup wizard (one time)
 ```
 
 > Requires `pip install kaggle` and Python 3.8+.
@@ -74,7 +74,8 @@ $ kagitch
 | `kagitch check`             |                          | Check quota & auth for all accounts     |
 | `kagitch doctor`            |                          | System diagnostics                      |
 | `kagitch update`            |                          | Pull latest version from git            |
-| `kagitch init [-r]`         |                          | Install / reload shell integration      |
+| `kagitch init`               |                          | Interactive setup wizard (7 steps)      |
+| `kagitch init -r`            |                          | Print shell reload command             |
 | `kagitch completions <sh>`  |                          | Print shell completion script           |
 | `kagitch help`              | `-h`, `--help`           | Show help                               |
 | `kagitch version`           | `-v`, `--version`        | Show version                            |
