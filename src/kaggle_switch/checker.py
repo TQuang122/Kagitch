@@ -9,7 +9,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import Account, KAGGLE_DEFAULT, get_accounts, load_config
@@ -75,15 +75,19 @@ def _swap_creds(acc: Account) -> None:
         creds_dst.unlink()
 
 
-def _patch_creds_expiry() -> None:
-    """Ensure access_token_expiration in KAGGLE_DEFAULT/credentials.json is timezone-aware.
+def _patch_creds_expiry(path: Path | None = None) -> None:
+    """Ensure access_token_expiration in a credentials.json is timezone-aware.
 
     kagglesdk internally compares the stored expiration against
     ``datetime.now(timezone.utc)`` (aware), but old code wrote naive
     ISO timestamps via ``datetime.now().isoformat()``.  A naive-vs-aware
     comparison crashes the kaggle CLI at import time with TypeError.
+
+    When *path* is provided (e.g. an account's source credentials.json),
+    the file is patched in-place.  When omitted, ``KAGGLE_DEFAULT / credentials.json``
+    is patched.
     """
-    creds = KAGGLE_DEFAULT / "credentials.json"
+    creds = path or (KAGGLE_DEFAULT / "credentials.json")
     if not creds.exists():
         return
     try:
@@ -317,6 +321,8 @@ def check_account(acc: Account) -> CheckResult:
     """Run full check on a single account."""
     result = CheckResult(number=acc.number, name=acc.name, config_path=acc.path)
     env = _build_env(acc)
+
+    _patch_creds_expiry(acc.path / "credentials.json")
 
     # ── Phase 0: kaggle CLI availability ──────────────────────────
     missing = _require_kaggle()
