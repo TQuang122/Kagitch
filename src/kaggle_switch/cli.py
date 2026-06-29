@@ -128,6 +128,7 @@ def render_help() -> None:
                 ("kagitch remove <N|name>", "Remove an account"),
                 ("kagitch rename <N> <new_name>", "Rename an account"),
                 ("kagitch patch [path]", "Patch kernel-metadata.json id"),
+                ("kagitch kernel init", "Create kernel-metadata.json"),
             ],
             "Shell integration": [
                 ("kagitch init [-r]", "Interactive setup wizard (7-step)"),
@@ -1049,6 +1050,153 @@ def cmd_patch(config: dict, args: list[str]) -> int:
     return 0
 
 
+# ── kernel init ─────────────────────────────────────────────────
+
+_LANG_MAP = {
+    ".py": "python",
+    ".ipynb": "python",
+    ".r": "r",
+    ".R": "r",
+    ".rmd": "rmarkdown",
+    ".Rmd": "rmarkdown",
+}
+
+_KTYPE_MAP = {
+    ".py": "script",
+    ".ipynb": "notebook",
+    ".r": "script",
+    ".R": "script",
+    ".rmd": "script",
+    ".Rmd": "script",
+}
+
+
+def _detect_code_file(cwd: Path) -> Path | None:
+    """Find the first .py / .ipynb / .r / .Rmd file in *cwd*."""
+    candidates = sorted(
+        p for p in cwd.iterdir()
+        if p.is_file() and p.suffix.lower() in {".py", ".ipynb", ".r", ".rmd"}
+    )
+    for ext in (".ipynb", ".py"):
+        for c in candidates:
+            if c.suffix.lower() == ext:
+                return c
+    return candidates[0] if candidates else None
+
+
+def cmd_kernel_init(config: dict, args: list[str]) -> int:
+    """Interactive wizard to create kernel-metadata.json."""
+    import json as _json
+
+    cwd = Path.cwd()
+    target = cwd / "kernel-metadata.json"
+
+    if target.exists():
+        if not Confirm.ask(
+            f"[bold]{target.name}[/] already exists. Overwrite?",
+            default=False,
+        ):
+            console.print(info("Aborted."))
+            return 0
+
+    # ── auto-detect ──────────────────────────────────────────────
+    username = _active_username(config) or ""
+    code_file = _detect_code_file(cwd)
+    ext = code_file.suffix if code_file else ""
+    auto_lang = _LANG_MAP.get(ext, "python")
+    auto_ktype = _KTYPE_MAP.get(ext, "script")
+    auto_slug = code_file.stem if code_file else "kernel"
+    auto_title = auto_slug.replace("_", " ").replace("-", " ").title()
+
+    # ── prompts ──────────────────────────────────────────────────
+    try:
+        title = Prompt.ask("Title", default=auto_title)
+        slug = Prompt.ask("Kernel slug", default=auto_slug)
+        lang = Prompt.ask(
+            "Language",
+            default=auto_lang,
+            choices=["python", "r", "rmarkdown"],
+        )
+        ktype = Prompt.ask(
+            "Kernel type",
+            default=auto_ktype,
+            choices=["script", "notebook"],
+        )
+
+        cf_default = str(code_file) if code_file else ""
+        code_path = Prompt.ask("Code file", default=cf_default)
+        if not code_path:
+            console.print(err("Code file is required."))
+            return 1
+
+        is_private = Confirm.ask("Private kernel?", default=True)
+        enable_gpu = Confirm.ask("Enable GPU?", default=False)
+        enable_tpu = Confirm.ask("Enable TPU?", default=False)
+        enable_internet = Confirm.ask("Enable internet?", default=True)
+
+        dataset_src = Prompt.ask(
+            "Dataset sources (comma-separated, blank=none)", default=""
+        )
+        comp_src = Prompt.ask(
+            "Competition sources (comma-separated, blank=none)", default=""
+        )
+        kernel_src = Prompt.ask(
+            "Kernel sources (comma-separated, blank=none)", default=""
+        )
+        model_src = Prompt.ask(
+            "Model sources (comma-separated, blank=none)", default=""
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+        console.print(info("Cancelled."))
+        return 1
+
+    # ── build metadata ───────────────────────────────────────────
+    kernel_id = f"{username}/{slug}" if username else slug
+    metadata: dict = {
+        "id": kernel_id,
+        "title": title,
+        "code_file": code_path,
+        "language": lang,
+        "kernel_type": ktype,
+        "is_private": str(is_private).lower(),
+        "enable_gpu": str(enable_gpu).lower(),
+        "enable_tpu": str(enable_tpu).lower(),
+        "enable_internet": str(enable_internet).lower(),
+        "machine_shape": "",
+        "dataset_sources": [
+            s.strip() for s in dataset_src.split(",") if s.strip()
+        ],
+        "competition_sources": [
+            s.strip() for s in comp_src.split(",") if s.strip()
+        ],
+        "kernel_sources": [
+            s.strip() for s in kernel_src.split(",") if s.strip()
+        ],
+        "model_sources": [
+            s.strip() for s in model_src.split(",") if s.strip()
+        ],
+    }
+
+    # ── write ────────────────────────────────────────────────────
+    try:
+        target.write_text(_json.dumps(metadata, indent=2) + "\n")
+    except OSError as e:
+        console.print(err(f"Failed to write {target.name}: {e}"))
+        return 1
+
+    console.print(card([
+        ok(f"Created [bold]{target.name}[/]"),
+        "",
+        f"  id:     [cyan]{kernel_id}[/]",
+        f"  title:  {title}",
+        f"  file:   {code_path}",
+        f"  lang:   {lang}  type: {ktype}",
+        f"  gpu:    {enable_gpu}  tpu:  {enable_tpu}",
+    ], title="kagitch kernel init"))
+    return 0
+
+
 def cmd_completions(args: list[str]) -> int:
     """Print shell completion script."""
     shell = args[0] if args else detect_shell()
@@ -1212,6 +1360,12 @@ def _main() -> int:
 
     if cmd == "patch":
         return cmd_patch(config, rest)
+
+    if cmd == "kernel":
+        if rest and rest[0] == "init":
+            return cmd_kernel_init(config, rest[1:])
+        console.print(err("Usage: kagitch kernel init"))
+        return 1
 
     if cmd == "doctor":
         return cmd_doctor(config)

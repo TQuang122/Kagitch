@@ -721,3 +721,213 @@ class TestPatchError:
         rc, out = run_cli("patch", str(temp_env[0] / "nonexistent"), capsys=capsys)
         assert rc == 1
         assert "kaggle kernels init" in out
+
+
+class TestKernelInit:
+    """Tests for kagitch kernel init."""
+
+    def test_basic_creates_metadata(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init creates kernel-metadata.json with correct defaults."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        config["active"] = "1"
+        cfg.save_config(config)
+
+        (tmp_path / "train.py").write_text("print('hello')")
+        monkeypatch.chdir(tmp_path)
+
+        answers = iter([
+            "My Kernel",       # title
+            "my-kernel",       # slug
+            "python",          # language
+            "script",          # kernel type
+            "train.py",        # code file
+            "",                # private = True (default)
+            "",                # GPU = False (default)
+            "",                # TPU = False (default)
+            "",                # internet = True (default)
+            "", "", "", "",    # sources
+        ])
+
+        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 0
+        meta_file = tmp_path / "kernel-metadata.json"
+        assert meta_file.exists()
+        import json
+        meta = json.loads(meta_file.read_text())
+        assert meta["title"] == "My Kernel"
+        assert meta["slug"] if "slug" in meta else meta["id"].endswith("my-kernel")
+        assert meta["language"] == "python"
+        assert meta["kernel_type"] == "script"
+        assert meta["code_file"] == "train.py"
+
+    def test_auto_detect_ipynb(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init auto-detects language=python, type=notebook from .ipynb."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        (tmp_path / "analysis.ipynb").write_text("{}")
+        monkeypatch.chdir(tmp_path)
+
+        answers = iter([
+            "Analysis", "analysis", "python", "notebook",
+            "analysis.ipynb", "", "", "", "", "", "", "", "",
+        ])
+
+        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 0
+        import json
+        meta = json.loads((tmp_path / "kernel-metadata.json").read_text())
+        assert meta["language"] == "python"
+        assert meta["kernel_type"] == "notebook"
+
+    def test_overwrite_decline_aborts(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init aborts when user declines overwrite of existing file."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        (tmp_path / "kernel-metadata.json").write_text("{}")
+        monkeypatch.chdir(tmp_path)
+
+        with patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: False):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 0
+        assert json.loads((tmp_path / "kernel-metadata.json").read_text()) == {}
+
+    def test_overwrite_confirm_writes(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init overwrites when user confirms."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        (tmp_path / "kernel-metadata.json").write_text("{}")
+        monkeypatch.chdir(tmp_path)
+
+        answers = iter([
+            "Test", "test", "python", "script",
+            "test.py", "", "", "", "", "", "", "", "",
+        ])
+        first_call = [True]
+
+        def confirm_side_effect(*a, **k):
+            if first_call:
+                first_call[0] = False
+                return True
+            return True
+
+        (tmp_path / "test.py").write_text("x=1")
+
+        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+             patch("kaggle_switch.cli.Confirm.ask", side_effect=confirm_side_effect):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 0
+        meta = json.loads((tmp_path / "kernel-metadata.json").read_text())
+        assert meta["title"] == "Test"
+
+    def test_cancelled_by_user(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init handles Ctrl+C gracefully."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch("kaggle_switch.cli.Prompt.ask", side_effect=KeyboardInterrupt):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 1
+        assert "Cancelled" in out
+
+    def test_bad_usage(self, temp_env, capsys, monkeypatch):
+        """kagitch kernel without init subcommand prints usage."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        rc, out = run_cli("kernel", capsys=capsys)
+        assert rc == 1
+        assert "Usage" in out
+
+    def test_sources_comma_separated(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init parses comma-separated sources."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "notebook.py").write_text("x=1")
+
+        answers = iter([
+            "Test", "test", "python", "script",
+            "notebook.py",
+            "user/dataset1, user/dataset2",
+            "competition/titanic",
+            "",
+            "org/model1",
+        ])
+
+        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 0
+        meta = json.loads((tmp_path / "kernel-metadata.json").read_text())
+        assert meta["dataset_sources"] == ["user/dataset1", "user/dataset2"]
+        assert meta["competition_sources"] == ["competition/titanic"]
+        assert meta["kernel_sources"] == []
+        assert meta["model_sources"] == ["org/model1"]
+
+    def test_no_active_username(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init uses slug-only id when no active username."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "train.py").write_text("x=1")
+
+        answers = iter([
+            "Test", "my-kern", "python", "script",
+            "train.py", "", "", "", "", "", "", "", "",
+        ])
+
+        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True), \
+             patch("kaggle_switch.cli._active_username", return_value=None):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 0
+        meta = json.loads((tmp_path / "kernel-metadata.json").read_text())
+        assert meta["id"] == "my-kern"
+
+    def test_no_code_file_fails(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init fails when user clears the code file prompt."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        monkeypatch.chdir(tmp_path)
+
+        answers = iter([
+            "Test", "test", "python", "script",
+            "",  # empty code file
+        ])
+
+        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
+             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 1
+        assert "required" in out.lower()
