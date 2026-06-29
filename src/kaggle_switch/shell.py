@@ -165,41 +165,33 @@ kagitch() {{
   fi
 
   local known_cmds=" {_KNOWN_CMDS_STR} "
+  local tmp=$(mktemp /tmp/kagitch.XXXXXX)
+  local rc
+
   if [[ "$known_cmds" =~ " $1 " ]]; then
-    local out
-    out=$(KAGITCH_SHELL_WRAPPER=1 command kagitch "$@" 2>&1)
-    local rc=$?
-    if [[ $rc -ne 0 ]]; then
-      echo "$out"
-      return $rc
-    fi
-    while IFS= read -r line; do
-      if [[ "$line" == "unset "* ]]; then
-        eval "$line"
-      elif [[ "$line" == "export "* ]]; then
-        eval "$line"
-      else
-        echo "$line"
-      fi
-    done <<< "$out"
+    KAGITCH_SHELL_WRAPPER=1 command kagitch "$@" 2>&1 | tee "$tmp"
   else
-    local out
-    out=$(KAGITCH_SHELL_WRAPPER=1 command kagitch switch "$1" 2>&1)
-    local rc=$?
-    if [[ $rc -ne 0 ]]; then
-      echo "$out"
-      return $rc
-    fi
-    while IFS= read -r line; do
-      if [[ "$line" == "unset "* ]]; then
-        eval "$line"
-      elif [[ "$line" == "export "* ]]; then
-        eval "$line"
-      else
-        echo "$line"
-      fi
-    done <<< "$out"
+    KAGITCH_SHELL_WRAPPER=1 command kagitch switch "$1" 2>&1 | tee "$tmp"
   fi
+
+  # Get exit code of kagitch (first command in pipeline)
+  if [[ -n ${{ZSH_VERSION+z}} ]]; then
+    rc=$pipestatus[1]
+  else
+    rc=${{PIPESTATUS[0]}}
+  fi
+
+  if [[ $rc -ne 0 ]]; then
+    rm -f "$tmp"
+    return $rc
+  fi
+
+  while IFS= read -r line; do
+    if [[ "$line" == "unset "* ]] || [[ "$line" == "export "* ]]; then
+      eval "$line"
+    fi
+  done < "$tmp"
+  rm -f "$tmp"
 }}
 """
 
