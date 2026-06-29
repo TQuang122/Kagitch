@@ -726,6 +726,30 @@ class TestPatchError:
 class TestKernelInit:
     """Tests for kagitch kernel init."""
 
+    def test_help_does_not_prompt(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init --help prints help without entering the wizard."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "kernel-metadata.json").write_text("{}")
+
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions, \
+             patch("questionary.confirm") as mock_confirm:
+            rc, out = run_cli("kernel", "init", "--help", capsys=capsys)
+
+        assert rc == 0
+        assert "Usage" in out
+        assert "kagitch kernel init" in out
+        mock_confirm.assert_not_called()
+        mock_questions.assert_not_called()
+
+    def test_select_highlight_tracks_pointer(self):
+        """kernel init select style highlights the cursor row, not the default value."""
+        style = cli._kernel_style()
+        rules = dict(style.style_rules)
+
+        assert "bg:ansigreen" in rules["highlighted"]
+        assert "noinherit" in rules["selected"]
+        assert "bg:" not in rules["selected"]
+
     def test_basic_creates_metadata(self, temp_env, capsys, monkeypatch, tmp_path):
         """kernel init creates kernel-metadata.json with correct defaults."""
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
@@ -737,21 +761,23 @@ class TestKernelInit:
         (tmp_path / "train.py").write_text("print('hello')")
         monkeypatch.chdir(tmp_path)
 
-        answers = iter([
-            "My Kernel",       # title
-            "my-kernel",       # slug
-            "python",          # language
-            "script",          # kernel type
-            "train.py",        # code file
-            "",                # private = True (default)
-            "",                # GPU = False (default)
-            "",                # TPU = False (default)
-            "",                # internet = True (default)
-            "", "", "", "",    # sources
-        ])
+        form_answers = {
+            "title": "My Kernel",
+            "slug": "my-kernel",
+            "lang": "python",
+            "ktype": "script",
+            "code_path": "train.py",
+            "is_private": True,
+            "accelerator": "None",
+            "enable_internet": True,
+            "dataset_src": "",
+            "comp_src": "",
+            "kernel_src": "",
+            "model_src": "",
+        }
 
-        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
-             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 0
@@ -764,6 +790,9 @@ class TestKernelInit:
         assert meta["language"] == "python"
         assert meta["kernel_type"] == "script"
         assert meta["code_file"] == "train.py"
+        assert meta["enable_gpu"] == "false"
+        assert meta["machine_shape"] == ""
+        assert "enable_tpu" not in meta
 
     def test_auto_detect_ipynb(self, temp_env, capsys, monkeypatch, tmp_path):
         """kernel init auto-detects language=python, type=notebook from .ipynb."""
@@ -775,13 +804,23 @@ class TestKernelInit:
         (tmp_path / "analysis.ipynb").write_text("{}")
         monkeypatch.chdir(tmp_path)
 
-        answers = iter([
-            "Analysis", "analysis", "python", "notebook",
-            "analysis.ipynb", "", "", "", "", "", "", "", "",
-        ])
+        form_answers = {
+            "title": "Analysis",
+            "slug": "analysis",
+            "lang": "python",
+            "ktype": "notebook",
+            "code_path": "analysis.ipynb",
+            "is_private": True,
+            "accelerator": "None",
+            "enable_internet": True,
+            "dataset_src": "",
+            "comp_src": "",
+            "kernel_src": "",
+            "model_src": "",
+        }
 
-        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
-             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 0
@@ -799,7 +838,8 @@ class TestKernelInit:
         (tmp_path / "kernel-metadata.json").write_text("{}")
         monkeypatch.chdir(tmp_path)
 
-        with patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: False):
+        with patch("questionary.confirm") as mock_confirm:
+            mock_confirm.return_value.ask.return_value = False
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 0
@@ -814,22 +854,27 @@ class TestKernelInit:
         (tmp_path / "kernel-metadata.json").write_text("{}")
         monkeypatch.chdir(tmp_path)
 
-        answers = iter([
-            "Test", "test", "python", "script",
-            "test.py", "", "", "", "", "", "", "", "",
-        ])
-        first_call = [True]
-
-        def confirm_side_effect(*a, **k):
-            if first_call:
-                first_call[0] = False
-                return True
-            return True
-
         (tmp_path / "test.py").write_text("x=1")
 
-        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
-             patch("kaggle_switch.cli.Confirm.ask", side_effect=confirm_side_effect):
+        form_answers = {
+            "title": "Test",
+            "slug": "test",
+            "lang": "python",
+            "ktype": "script",
+            "code_path": "test.py",
+            "is_private": True,
+            "accelerator": "None",
+            "enable_internet": True,
+            "dataset_src": "",
+            "comp_src": "",
+            "kernel_src": "",
+            "model_src": "",
+        }
+
+        with patch("questionary.confirm") as mock_confirm, \
+             patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_confirm.return_value.ask.return_value = True
+            mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 0
@@ -844,7 +889,42 @@ class TestKernelInit:
 
         monkeypatch.chdir(tmp_path)
 
-        with patch("kaggle_switch.cli.Prompt.ask", side_effect=KeyboardInterrupt):
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_questions.side_effect = KeyboardInterrupt
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 1
+        assert "Cancelled" in out
+
+    def test_empty_dict_cancelled(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init handles empty dict from cancelled form."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        monkeypatch.chdir(tmp_path)
+
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_questions.return_value = {}
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 1
+        assert "Cancelled" in out
+
+    def test_overwrite_then_form_empty(self, temp_env, capsys, monkeypatch, tmp_path):
+        """kernel init handles overwrite confirmed then empty form result."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        (tmp_path / "kernel-metadata.json").write_text("{}")
+        (tmp_path / "test.py").write_text("x=1")
+        monkeypatch.chdir(tmp_path)
+
+        with patch("questionary.confirm") as mock_confirm, \
+             patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_confirm.return_value.ask.return_value = True
+            mock_questions.return_value = {}
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 1
@@ -869,17 +949,23 @@ class TestKernelInit:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "notebook.py").write_text("x=1")
 
-        answers = iter([
-            "Test", "test", "python", "script",
-            "notebook.py",
-            "user/dataset1, user/dataset2",
-            "competition/titanic",
-            "",
-            "org/model1",
-        ])
+        form_answers = {
+            "title": "Test",
+            "slug": "test",
+            "lang": "python",
+            "ktype": "script",
+            "code_path": "notebook.py",
+            "is_private": True,
+            "accelerator": "NvidiaTeslaT4",
+            "enable_internet": True,
+            "dataset_src": "user/dataset1, user/dataset2",
+            "comp_src": "competition/titanic",
+            "kernel_src": "",
+            "model_src": "org/model1",
+        }
 
-        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
-             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 0
@@ -888,6 +974,45 @@ class TestKernelInit:
         assert meta["competition_sources"] == ["competition/titanic"]
         assert meta["kernel_sources"] == []
         assert meta["model_sources"] == ["org/model1"]
+        assert meta["enable_gpu"] == "true"
+        assert meta["machine_shape"] == "NvidiaTeslaT4"
+        assert "enable_tpu" not in meta
+
+    def test_tpu_uses_machine_shape_without_enable_tpu(
+        self, temp_env, capsys, monkeypatch, tmp_path
+    ):
+        """kernel init stores TPU selection in machine_shape only."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        cfg.save_config(config)
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "train.py").write_text("x=1")
+
+        form_answers = {
+            "title": "TPU Test",
+            "slug": "tpu-test",
+            "lang": "python",
+            "ktype": "script",
+            "code_path": "train.py",
+            "is_private": True,
+            "accelerator": "Tpu1VmV38",
+            "enable_internet": True,
+            "dataset_src": "",
+            "comp_src": "",
+            "kernel_src": "",
+            "model_src": "",
+        }
+
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_questions.return_value = form_answers
+            rc, out = run_cli("kernel", "init", capsys=capsys)
+
+        assert rc == 0
+        meta = json.loads((tmp_path / "kernel-metadata.json").read_text())
+        assert meta["enable_gpu"] == "false"
+        assert meta["machine_shape"] == "Tpu1VmV38"
+        assert "enable_tpu" not in meta
 
     def test_no_active_username(self, temp_env, capsys, monkeypatch, tmp_path):
         """kernel init uses slug-only id when no active username."""
@@ -898,14 +1023,24 @@ class TestKernelInit:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "train.py").write_text("x=1")
 
-        answers = iter([
-            "Test", "my-kern", "python", "script",
-            "train.py", "", "", "", "", "", "", "", "",
-        ])
+        form_answers = {
+            "title": "Test",
+            "slug": "my-kern",
+            "lang": "python",
+            "ktype": "script",
+            "code_path": "train.py",
+            "is_private": True,
+            "accelerator": "None",
+            "enable_internet": True,
+            "dataset_src": "",
+            "comp_src": "",
+            "kernel_src": "",
+            "model_src": "",
+        }
 
-        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
-             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True), \
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions, \
              patch("kaggle_switch.cli._active_username", return_value=None):
+            mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 0
@@ -920,13 +1055,23 @@ class TestKernelInit:
 
         monkeypatch.chdir(tmp_path)
 
-        answers = iter([
-            "Test", "test", "python", "script",
-            "",  # empty code file
-        ])
+        form_answers = {
+            "title": "Test",
+            "slug": "test",
+            "lang": "python",
+            "ktype": "script",
+            "code_path": "",
+            "is_private": True,
+            "accelerator": "None",
+            "enable_internet": True,
+            "dataset_src": "",
+            "comp_src": "",
+            "kernel_src": "",
+            "model_src": "",
+        }
 
-        with patch("kaggle_switch.cli.Prompt.ask", side_effect=lambda *a, **k: next(answers)), \
-             patch("kaggle_switch.cli.Confirm.ask", side_effect=lambda *a, **k: True):
+        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+            mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
         assert rc == 1

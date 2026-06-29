@@ -128,6 +128,10 @@ _KNOWN_CMDS_STR = _build_cmds_str()
 _POWERSHELL_FUNCTION = """\
 function Invoke-Kagitch {
     param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+    if ($Arguments.Count -ge 2 -and $Arguments[0] -eq "kernel" -and $Arguments[1] -eq "init") {
+        & "kagitch.exe" @Arguments
+        return
+    }
     $previousWrapper = $env:KAGITCH_SHELL_WRAPPER
     $env:KAGITCH_SHELL_WRAPPER = "1"
     try {
@@ -161,6 +165,11 @@ _ZSH_BASH_FUNCTION = f"""\
 kagitch() {{
   if [[ $# -eq 0 ]]; then
     command kagitch
+    return
+  fi
+
+  if [[ "$1" == "kernel" && "$2" == "init" ]]; then
+    command kagitch "$@"
     return
   fi
 
@@ -199,6 +208,11 @@ _FISH_FUNCTION = f"""\
 function kagitch
   if test (count $argv) -eq 0
     command kagitch
+    return
+  end
+
+  if test "$argv[1]" = "kernel"; and test "$argv[2]" = "init"
+    command kagitch $argv
     return
   end
 

@@ -41,6 +41,10 @@ class TestShellpath:
             for alias in ("ls", "cur", ".", "rm", "login", "-h", "help", "-v", "version"):
                 assert alias in result
 
+    def test_zsh_function_includes_kernel_command(self):
+        result = sh.shellpath("zsh")
+        assert "kernel" in result
+
     def test_zsh_function_has_env_parsing(self):
         result = sh.shellpath("zsh")
         assert 'KAGITCH_SHELL_WRAPPER=1' in result
@@ -61,6 +65,19 @@ class TestShellpath:
         assert 'KAGGLE_CONFIG_DIR' in result
         assert 'KAGGLE_API_TOKEN' in result
         assert 'Remove-Item' in result
+
+    def test_shell_functions_bypass_wrapper_for_kernel_init(self):
+        zsh = sh.shellpath("zsh")
+        assert '[[ "$1" == "kernel" && "$2" == "init" ]]' in zsh
+        assert 'command kagitch "$@"' in zsh
+
+        fish = sh.shellpath("fish")
+        assert 'test "$argv[1]" = "kernel"; and test "$argv[2]" = "init"' in fish
+        assert 'command kagitch $argv' in fish
+
+        powershell = sh.shellpath("powershell")
+        assert '$Arguments[0] -eq "kernel" -and $Arguments[1] -eq "init"' in powershell
+        assert '& "kagitch.exe" @Arguments' in powershell
 
 
 class TestDetectShell:

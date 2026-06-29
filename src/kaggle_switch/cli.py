@@ -1071,6 +1071,27 @@ _KTYPE_MAP = {
 }
 
 
+_ACCELERATOR_CHOICES = [
+    "None",
+    "GPU",
+    "NvidiaTeslaT4",
+    "NvidiaTeslaP100",
+    "Tpu1VmV38",
+]
+
+_GPU_ACCELERATORS = {"GPU", "NvidiaTeslaT4", "NvidiaTeslaP100"}
+
+
+def _kernel_machine_shape(accelerator: str) -> str:
+    """Return Kaggle machine_shape value for a selected accelerator."""
+    return "" if accelerator in ("", "None", "GPU") else accelerator
+
+
+def _kernel_enable_gpu(accelerator: str) -> str:
+    """Return Kaggle enable_gpu value for a selected accelerator."""
+    return str(accelerator in _GPU_ACCELERATORS).lower()
+
+
 def _detect_code_file(cwd: Path) -> Path | None:
     """Find the first .py / .ipynb / .r / .Rmd file in *cwd*."""
     candidates = sorted(
@@ -1084,6 +1105,158 @@ def _detect_code_file(cwd: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
+def _kernel_qmark() -> str:
+    """Short prompt prefix that avoids the default questionary '?'."""
+    return "\u276f"  # heavy right-pointing angle ❯
+
+
+def _kernel_style() -> object:
+    """questionary.Style matching the kagitch color theme."""
+    import questionary
+    return questionary.Style([
+        ("qmark", "fg:ansicyan"),
+        ("question", "bold"),
+        ("answer", "fg:ansigreen"),
+        ("pointer", "fg:ansicyan bold"),
+        ("highlighted", "fg:ansiblack bg:ansigreen"),
+        ("selected", "noinherit fg:default"),
+        ("instruction", "fg:ansibrightblack"),
+        ("text", "fg:default"),
+        ("validation", "fg:ansired bold"),
+    ])
+
+
+def _kernel_init_help() -> None:
+    """Print focused help for `kagitch kernel init`."""
+    console.print("[bold]Usage:[/bold]")
+    console.print(
+        "  [green]kagitch kernel init[/] "
+        "[dim]Create kernel-metadata.json interactively[/]"
+    )
+    console.print()
+    console.print("[bold]What it asks:[/bold]")
+    console.print(
+        "  [cyan]title[/], [cyan]slug[/], language, kernel type, "
+        "code file, visibility, accelerator, internet, and sources"
+    )
+    console.print()
+    console.print("[bold]Examples:[/bold]")
+    console.print("  [green]kagitch kernel init[/]")
+
+
+def _ask_kernel_init_questions(
+    questionary,
+    qmark: str,
+    qst: object,
+    defaults: dict[str, str],
+) -> dict | None:
+    """Ask kernel metadata prompts one-by-one to avoid questionary.form spacing."""
+    answers: dict = {}
+
+    questions = [
+        (
+            "title",
+            questionary.text("Title", default=defaults["title"], qmark=qmark, style=qst),
+        ),
+        (
+            "slug",
+            questionary.text("Kernel slug", default=defaults["slug"], qmark=qmark, style=qst),
+        ),
+        (
+            "lang",
+            questionary.select(
+                "Language",
+                qmark=qmark,
+                style=qst,
+                choices=["python", "r", "rmarkdown"],
+                default=defaults["lang"],
+            ),
+        ),
+        (
+            "ktype",
+            questionary.select(
+                "Kernel type",
+                qmark=qmark,
+                style=qst,
+                choices=["script", "notebook"],
+                default=defaults["ktype"],
+            ),
+        ),
+        (
+            "code_path",
+            questionary.text(
+                "Code file",
+                qmark=qmark,
+                style=qst,
+                default=defaults["code_path"],
+                validate=lambda v: v.strip() != "" or "Code file is required.",
+            ),
+        ),
+        (
+            "is_private",
+            questionary.confirm("Private kernel?", default=True, qmark=qmark, style=qst),
+        ),
+        (
+            "accelerator",
+            questionary.select(
+                "Accelerator",
+                qmark=qmark,
+                style=qst,
+                choices=_ACCELERATOR_CHOICES,
+                default="None",
+            ),
+        ),
+        (
+            "enable_internet",
+            questionary.confirm("Enable internet?", default=True, qmark=qmark, style=qst),
+        ),
+        (
+            "dataset_src",
+            questionary.text(
+                "Dataset sources (comma-separated, blank=none)",
+                default="",
+                qmark=qmark,
+                style=qst,
+            ),
+        ),
+        (
+            "comp_src",
+            questionary.text(
+                "Competition sources (comma-separated, blank=none)",
+                default="",
+                qmark=qmark,
+                style=qst,
+            ),
+        ),
+        (
+            "kernel_src",
+            questionary.text(
+                "Kernel sources (comma-separated, blank=none)",
+                default="",
+                qmark=qmark,
+                style=qst,
+            ),
+        ),
+        (
+            "model_src",
+            questionary.text(
+                "Model sources (comma-separated, blank=none)",
+                default="",
+                qmark=qmark,
+                style=qst,
+            ),
+        ),
+    ]
+
+    for key, question in questions:
+        answer = question.ask()
+        if answer is None:
+            return None
+        answers[key] = answer
+
+    return answers
+
+
 def cmd_kernel_init(config: dict, args: list[str]) -> int:
     """Interactive wizard to create kernel-metadata.json."""
     import json as _json
@@ -1092,10 +1265,13 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
     cwd = Path.cwd()
     target = cwd / "kernel-metadata.json"
 
+    qmark = _kernel_qmark()
+    qst = _kernel_style()
+
     if target.exists():
         overwrite = questionary.confirm(
             f"{target.name} already exists. Overwrite?",
-            default=False,
+            default=False, qmark=qmark, style=qst,
         ).ask()
         if overwrite is None or not overwrite:
             console.print(info("Aborted."))
@@ -1112,49 +1288,30 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
 
     # ── prompts ──────────────────────────────────────────────────
     try:
-        answers = questionary.form(
-            title=questionary.text("Title", default=auto_title),
-            slug=questionary.text("Kernel slug", default=auto_slug),
-            lang=questionary.select(
-                "Language",
-                choices=["python", "r", "rmarkdown"],
-                default=auto_lang,
-            ),
-            ktype=questionary.select(
-                "Kernel type",
-                choices=["script", "notebook"],
-                default=auto_ktype,
-            ),
-            code_path=questionary.text(
-                "Code file",
-                default=str(code_file) if code_file else "",
-                validate=lambda v: v.strip() != "" or "Code file is required.",
-            ),
-            is_private=questionary.confirm("Private kernel?", default=True),
-            enable_gpu=questionary.confirm("Enable GPU?", default=False),
-            enable_tpu=questionary.confirm("Enable TPU?", default=False),
-            enable_internet=questionary.confirm("Enable internet?", default=True),
-            dataset_src=questionary.text(
-                "Dataset sources (comma-separated, blank=none)", default="",
-            ),
-            comp_src=questionary.text(
-                "Competition sources (comma-separated, blank=none)", default="",
-            ),
-            kernel_src=questionary.text(
-                "Kernel sources (comma-separated, blank=none)", default="",
-            ),
-            model_src=questionary.text(
-                "Model sources (comma-separated, blank=none)", default="",
-            ),
-        ).ask()
+        answers = _ask_kernel_init_questions(
+            questionary,
+            qmark,
+            qst,
+            {
+                "title": auto_title,
+                "slug": auto_slug,
+                "lang": auto_lang,
+                "ktype": auto_ktype,
+                "code_path": str(code_file) if code_file else "",
+            },
+        )
     except (KeyboardInterrupt, EOFError):
         console.print()
         console.print(info("Cancelled."))
         return 1
 
-    if answers is None:
+    if not answers:
         console.print()
         console.print(info("Cancelled."))
+        return 1
+
+    if not answers.get("code_path", "").strip():
+        console.print(err("Code file is required."))
         return 1
 
     # ── build metadata ───────────────────────────────────────────
@@ -1166,10 +1323,9 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
         "language": answers["lang"],
         "kernel_type": answers["ktype"],
         "is_private": str(answers["is_private"]).lower(),
-        "enable_gpu": str(answers["enable_gpu"]).lower(),
-        "enable_tpu": str(answers["enable_tpu"]).lower(),
+        "enable_gpu": _kernel_enable_gpu(answers["accelerator"]),
         "enable_internet": str(answers["enable_internet"]).lower(),
-        "machine_shape": "",
+        "machine_shape": _kernel_machine_shape(answers["accelerator"]),
         "dataset_sources": [
             s.strip() for s in answers["dataset_src"].split(",") if s.strip()
         ],
@@ -1198,7 +1354,7 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
         f"  title:  [bold]{answers['title']}[/]",
         f"  file:   [bold]{answers['code_path']}[/]",
         f"  lang:   [bold]{answers['lang']}[/]  type: [bold]{answers['ktype']}[/]",
-        f"  gpu:    {'[green]yes[/]' if answers['enable_gpu'] else '[dim]no[/]'}  tpu:  {'[green]yes[/]' if answers['enable_tpu'] else '[dim]no[/]'}",
+        f"  accelerator: [bold]{answers['accelerator']}[/]",
     ], title="kagitch kernel init"))
     return 0
 
@@ -1369,6 +1525,9 @@ def _main() -> int:
 
     if cmd == "kernel":
         if rest and rest[0] == "init":
+            if len(rest) > 1 and rest[1] in ("--help", "-h", "help"):
+                _kernel_init_help()
+                return 0
             return cmd_kernel_init(config, rest[1:])
         console.print(err("Usage: kagitch kernel init"))
         return 1
