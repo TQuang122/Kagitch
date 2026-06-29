@@ -29,6 +29,7 @@ _COMMANDS: dict[str, _CmdDef] = {
     "remove":      _CmdDef("Remove an account",                 ["rm"]),
     "rename":      _CmdDef("Rename an account"),
     "patch":       _CmdDef("Patch kernel-metadata.json id"),
+    "kernel":      _CmdDef("Manage Kaggle kernel metadata",     ["kernel init"]),
     "shellpath":   _CmdDef("Print shell function"),
     "init":        _CmdDef("Auto-install shell integration"),
     "check":       _CmdDef("Check account health and quota"),
