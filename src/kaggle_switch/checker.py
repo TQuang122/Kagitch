@@ -68,11 +68,14 @@ _creds_lock = threading.Lock()
 def _swap_creds(acc: Account) -> None:
     creds_dst = KAGGLE_DEFAULT / "credentials.json"
     creds_src = acc.path / "credentials.json"
-    if creds_src.exists():
-        creds_dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(creds_src, creds_dst)
-    elif creds_dst.exists():
-        creds_dst.unlink()
+    if not creds_src.exists():
+        if creds_dst.exists():
+            creds_dst.unlink()
+        return
+    if creds_src.resolve() == creds_dst.resolve():
+        return  # already in place
+    creds_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(creds_src, creds_dst)
 
 
 def _patch_creds_expiry(path: Path | None = None) -> None:

@@ -1095,6 +1095,7 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
         if not Confirm.ask(
             f"[bold]{target.name}[/] already exists. Overwrite?",
             default=False,
+            console=console,
         ):
             console.print(info("Aborted."))
             return 0
@@ -1110,41 +1111,47 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
 
     # ── prompts ──────────────────────────────────────────────────
     try:
-        title = Prompt.ask("Title", default=auto_title)
-        slug = Prompt.ask("Kernel slug", default=auto_slug)
+        title = Prompt.ask("Title", default=auto_title, console=console)
+        slug = Prompt.ask("Kernel slug", default=auto_slug, console=console)
         lang = Prompt.ask(
             "Language",
             default=auto_lang,
             choices=["python", "r", "rmarkdown"],
+            console=console,
         )
         ktype = Prompt.ask(
             "Kernel type",
             default=auto_ktype,
             choices=["script", "notebook"],
+            console=console,
         )
 
         cf_default = str(code_file) if code_file else ""
-        code_path = Prompt.ask("Code file", default=cf_default)
+        code_path = Prompt.ask("Code file", default=cf_default, console=console)
         if not code_path:
             console.print(err("Code file is required."))
             return 1
 
-        is_private = Confirm.ask("Private kernel?", default=True)
-        enable_gpu = Confirm.ask("Enable GPU?", default=False)
-        enable_tpu = Confirm.ask("Enable TPU?", default=False)
-        enable_internet = Confirm.ask("Enable internet?", default=True)
+        is_private = Confirm.ask("Private kernel?", default=True, console=console)
+        enable_gpu = Confirm.ask("Enable GPU?", default=False, console=console)
+        enable_tpu = Confirm.ask("Enable TPU?", default=False, console=console)
+        enable_internet = Confirm.ask("Enable internet?", default=True, console=console)
 
         dataset_src = Prompt.ask(
-            "Dataset sources (comma-separated, blank=none)", default=""
+            "Dataset sources (comma-separated, blank=none)", default="",
+            console=console,
         )
         comp_src = Prompt.ask(
-            "Competition sources (comma-separated, blank=none)", default=""
+            "Competition sources (comma-separated, blank=none)", default="",
+            console=console,
         )
         kernel_src = Prompt.ask(
-            "Kernel sources (comma-separated, blank=none)", default=""
+            "Kernel sources (comma-separated, blank=none)", default="",
+            console=console,
         )
         model_src = Prompt.ask(
-            "Model sources (comma-separated, blank=none)", default=""
+            "Model sources (comma-separated, blank=none)", default="",
+            console=console,
         )
     except (KeyboardInterrupt, EOFError):
         console.print()
@@ -1189,10 +1196,10 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
         ok(f"Created [bold]{target.name}[/]"),
         "",
         f"  id:     [cyan]{kernel_id}[/]",
-        f"  title:  {title}",
-        f"  file:   {code_path}",
-        f"  lang:   {lang}  type: {ktype}",
-        f"  gpu:    {enable_gpu}  tpu:  {enable_tpu}",
+        f"  title:  [bold]{title}[/]",
+        f"  file:   [bold]{code_path}[/]",
+        f"  lang:   [bold]{lang}[/]  type: [bold]{ktype}[/]",
+        f"  gpu:    {'[green]yes[/]' if enable_gpu else '[dim]no[/]'}  tpu:  {'[green]yes[/]' if enable_tpu else '[dim]no[/]'}",
     ], title="kagitch kernel init"))
     return 0
 
