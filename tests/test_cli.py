@@ -572,3 +572,152 @@ class TestDoctor:
         rc, out = run_cli("doctor", capsys=capsys)
         assert rc == 1
         assert "kagitch init" in out
+
+
+class TestCurrentQuota:
+    """Tests for cmd_current using check_account (single-account optimization)."""
+
+    def test_current_shows_quota(self, temp_env, capsys, monkeypatch):
+        """current calls check_account for the active account only."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        from kaggle_switch.checker import CheckResult
+        cr = CheckResult(number="1", name="alpha", config_path=Path("/tmp/fake"))
+        cr.quota_ok = True
+        cr.gpu_remaining = "4.13h"
+        cr.tpu_remaining = "20.00h"
+
+        with patch("kaggle_switch.checker.check_account", return_value=cr):
+            rc, out = run_cli("current", capsys=capsys)
+
+        assert rc == 0
+        assert "alpha" in out
+        assert "4.13h" in out
+        assert "20.00h" in out
+
+    def test_current_shows_quota_error(self, temp_env, capsys, monkeypatch):
+        """current shows quota error when check_account returns error."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        from kaggle_switch.checker import CheckResult
+        cr = CheckResult(number="1", name="alpha", config_path=Path("/tmp/fake"))
+        cr.quota_ok = False
+        cr.quota_error = "403 Forbidden"
+
+        with patch("kaggle_switch.checker.check_account", return_value=cr):
+            rc, out = run_cli("current", capsys=capsys)
+
+        assert rc == 0
+        assert "403 Forbidden" in out
+
+    def test_current_no_active(self, temp_env, capsys, monkeypatch):
+        """current shows warning when no account is active."""
+        # current_active returns None only when KAGGLE_CONFIG_DIR is set but
+        # doesn't match any account's config_dir
+        monkeypatch.setenv("KAGGLE_CONFIG_DIR", "/nonexistent/path")
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": "alpha"}}
+        cfg.save_config(config)
+
+        rc, out = run_cli("current", capsys=capsys)
+        assert rc == 0
+        assert "No account active" in out
+
+
+class TestCheckSwitchRecommendation:
+    """Tests for 'switch to best' recommendation in check summary."""
+
+    def _make_check_result(self, number, name, gpu_remaining, quota_ok=True):
+        from kaggle_switch.checker import CheckResult
+        cr = CheckResult(number=number, name=name, config_path=Path("/tmp/fake"))
+        cr.file_ok = True
+        cr.auth_match = True
+        cr.quota_ok = quota_ok
+        cr.gpu_remaining = gpu_remaining
+        cr.tpu_remaining = "0h"
+        return cr
+
+    def test_check_recommends_switch(self, temp_env, capsys, monkeypatch):
+        """check suggests switching when another account has more GPU quota."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "alpha", "config_dir": ""},
+            "2": {"name": "beta", "config_dir": "beta"},
+        }
+        config["active"] = "1"
+        cfg.save_config(config)
+
+        r1 = self._make_check_result("1", "alpha", "1.00h")
+        r2 = self._make_check_result("2", "beta", "4.00h")
+
+        with patch("kaggle_switch.checker.check_all_accounts", return_value=[r1, r2]):
+            rc, out = run_cli("check", capsys=capsys)
+
+        assert rc == 0
+        assert "Try" in out
+        assert "kagitch 2" in out
+        assert "more GPU quota" in out
+
+    def test_check_no_recommendation_same_quota(self, temp_env, capsys, monkeypatch):
+        """check does NOT recommend switch when active account already has best GPU."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "alpha", "config_dir": ""},
+            "2": {"name": "beta", "config_dir": "beta"},
+        }
+        config["active"] = "1"
+        cfg.save_config(config)
+
+        r1 = self._make_check_result("1", "alpha", "4.00h")
+        r2 = self._make_check_result("2", "beta", "1.00h")
+
+        with patch("kaggle_switch.checker.check_all_accounts", return_value=[r1, r2]):
+            rc, out = run_cli("check", capsys=capsys)
+
+        assert rc == 0
+        assert "Try" not in out
+        assert "more GPU quota" not in out
+
+    def test_check_no_recommendation_when_no_active(self, temp_env, capsys, monkeypatch):
+        """check does NOT recommend switch when no account is active."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {
+            "1": {"name": "alpha", "config_dir": ""},
+            "2": {"name": "beta", "config_dir": "beta"},
+        }
+        cfg.save_config(config)
+
+        r1 = self._make_check_result("1", "alpha", "1.00h")
+        r2 = self._make_check_result("2", "beta", "4.00h")
+
+        with patch("kaggle_switch.checker.check_all_accounts", return_value=[r1, r2]), \
+             patch("kaggle_switch.cli.current_active", return_value=None):
+            rc, out = run_cli("check", capsys=capsys)
+
+        assert rc == 0
+        assert "more GPU quota" not in out
+
+
+class TestPatchError:
+    """Tests for improved cmd_patch error message."""
+
+    def test_patch_missing_file_suggests_init(self, temp_env, capsys, monkeypatch):
+        """patch suggests kaggle kernels init when metadata file not found."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        config["active"] = "1"
+        cfg.save_config(config)
+
+        rc, out = run_cli("patch", str(temp_env[0] / "nonexistent"), capsys=capsys)
+        assert rc == 1
+        assert "kaggle kernels init" in out
