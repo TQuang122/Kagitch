@@ -139,11 +139,11 @@ function Invoke-Kagitch {
         }
     }
     foreach ($line in $output) {
-        if ($line -match '^export KAGGLE_CONFIG_DIR=(.*)') {
+        if ($line -match '^export KAGGLE_CONFIG_DIR="(.*)"') {
             $env:KAGGLE_CONFIG_DIR = $matches[1]
         } elseif ($line -match '^unset KAGGLE_CONFIG_DIR') {
             Remove-Item Env:\\KAGGLE_CONFIG_DIR -ErrorAction SilentlyContinue
-        } elseif ($line -match '^export KAGGLE_API_TOKEN=(.*)') {
+        } elseif ($line -match '^export KAGGLE_API_TOKEN="(.*)"') {
             $env:KAGGLE_API_TOKEN = $matches[1]
         } elseif ($line -match '^unset KAGGLE_API_TOKEN') {
             Remove-Item Env:\\KAGGLE_API_TOKEN -ErrorAction SilentlyContinue
@@ -222,11 +222,11 @@ function kagitch
         case "unset KAGGLE_CONFIG_DIR"
           set -e KAGGLE_CONFIG_DIR
         case "export KAGGLE_CONFIG_DIR="*
-          set -gx KAGGLE_CONFIG_DIR (string split -m1 "=" -- "$line")[2]
+          set -gx KAGGLE_CONFIG_DIR (string replace -a '"' '' -- (string split -m1 "=" -- "$line")[2])
         case "unset KAGGLE_API_TOKEN"
           set -e KAGGLE_API_TOKEN
         case "export KAGGLE_API_TOKEN="*
-          set -gx KAGGLE_API_TOKEN (string split -m1 "=" -- "$line")[2]
+          set -gx KAGGLE_API_TOKEN (string replace -a '"' '' -- (string split -m1 "=" -- "$line")[2])
         case '*'
           echo "$line"
       end
@@ -243,11 +243,11 @@ function kagitch
         case "unset KAGGLE_CONFIG_DIR"
           set -e KAGGLE_CONFIG_DIR
         case "export KAGGLE_CONFIG_DIR="*
-          set -gx KAGGLE_CONFIG_DIR (string split -m1 "=" -- "$line")[2]
+          set -gx KAGGLE_CONFIG_DIR (string replace -a '"' '' -- (string split -m1 "=" -- "$line")[2])
         case "unset KAGGLE_API_TOKEN"
           set -e KAGGLE_API_TOKEN
         case "export KAGGLE_API_TOKEN="*
-          set -gx KAGGLE_API_TOKEN (string split -m1 "=" -- "$line")[2]
+          set -gx KAGGLE_API_TOKEN (string replace -a '"' '' -- (string split -m1 "=" -- "$line")[2])
         case '*'
           echo "$line"
       end

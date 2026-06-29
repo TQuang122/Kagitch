@@ -353,13 +353,13 @@ def cmd_switch(config: dict, key: str) -> int:
     if acc.is_default:
         env_lines.append("unset KAGGLE_CONFIG_DIR")
     else:
-        env_lines.append(f"export KAGGLE_CONFIG_DIR={acc.path}")
+        env_lines.append(f'export KAGGLE_CONFIG_DIR="{acc.path}"')
 
     api_token = acc.api_token
     if not api_token and acc.auth_type == "oauth":
         api_token = _refresh_oauth_token(acc.path / "credentials.json")
     if api_token:
-        env_lines.append(f"export KAGGLE_API_TOKEN={api_token}")
+        env_lines.append(f'export KAGGLE_API_TOKEN="{api_token}"')
     else:
         env_lines.append("unset KAGGLE_API_TOKEN")
 
@@ -742,19 +742,18 @@ def cmd_remove(config: dict, args: list[str]) -> int:
         console.print(err("Usage: kagitch remove <N|name>"))
         return 1
     try:
-        acc = remove_account(config, args[0])
-        if Confirm.ask(
-            f"[{C_WARN}]\u279c[/] Remove account #{acc.number}: [bold]{acc.name}[/]?",
+        acc = find_account(config, args[0])
+        if acc is None:
+            raise KeyError(f"Account '{args[0]}' not found")
+        if not Confirm.ask(
+            f"[{C_WARN}]\u279c[/] Remove account #{acc.number}: [bold]{acc.name}[/]?\n"
+            f"  [dim]Credentials at {acc.path} will be deleted.[/]",
             default=False,
         ):
-            console.print(ok("Removed."))
-        else:
             console.print(f"[{C_DIM}]Cancelled.[/]")
-            config["accounts"][acc.number] = {
-                "name": acc.name,
-                "config_dir": acc.config_dir,
-            }
-            save_config(config)
+            return 0
+        remove_account(config, args[0])
+        console.print(ok("Removed."))
         return 0
     except KeyError as e:
         console.print(err(str(e)))

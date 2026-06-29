@@ -284,7 +284,6 @@ def _check_quota_sdk(
                 return ("", "", "", False, "no credentials found")
 
             resp = client.kernels.kernels_api_client.get_accelerator_quota_statistics()
-            resp = client.kernels.kernels_api_client.get_accelerator_quota_statistics()
 
             gpu_q = resp.gpu_quota
             tpu_q = resp.tpu_quota
