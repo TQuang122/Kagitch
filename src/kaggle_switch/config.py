@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import keychain
+
 
 def _config_dir() -> Path:
     if sys.platform == "win32":
@@ -50,8 +52,37 @@ def load_config() -> dict:
         return {"accounts": {}}
     config = json.loads(CONFIG_FILE.read_text())
     _renumber_accounts(config)
+    _migrate_plaintext_tokens(config)
     save_config(config)  # persist compaction
     return config
+
+
+def _migrate_plaintext_tokens(config: dict) -> None:
+    """Move any api_token stored in plaintext JSON to the OS keychain.
+
+    After migration the api_token field is removed from accounts.json so
+    tokens are never written to disk in cleartext again.
+    """
+    changed = False
+    for _n, acc in config["accounts"].items():
+        token = acc.get("api_token", "")
+        if token:
+            keychain.store_token(acc["name"], token)
+            del acc["api_token"]
+            changed = True
+
+
+def get_token(account: Account) -> str:
+    """Retrieve the API token for an account.
+
+    Checks the OS keychain first; falls back to any plaintext value
+    stored in the Account dataclass (for environments where keyring
+    is unavailable).
+    """
+    token = keychain.get_token(account.name)
+    if token:
+        return token
+    return account.api_token
 
 
 def _renumber_accounts(config: dict) -> None:
@@ -162,12 +193,12 @@ def add_account(config: dict, name: str, source: str | Path | None = None, auth_
 
     entry: dict[str, str] = {"name": name, "config_dir": name}
     if is_token and isinstance(source, str):
-        entry["api_token"] = source
+        keychain.store_token(name, source)
     if auth_type:
         entry["auth_type"] = auth_type
     config["accounts"][next_n] = entry
     save_config(config)
-    return Account(number=next_n, name=name, config_dir=name, api_token=source if is_token else "", auth_type=auth_type)
+    return Account(number=next_n, name=name, config_dir=name, auth_type=auth_type)
 
 
 def remove_account(config: dict, key: str) -> Account:
@@ -175,6 +206,7 @@ def remove_account(config: dict, key: str) -> Account:
     account = find_account(config, key)
     if account is None:
         raise KeyError(f"Account '{key}' not found")
+    keychain.delete_token(account.name)
     del config["accounts"][account.number]
     save_config(config)
     if account.config_dir:

@@ -23,6 +23,7 @@ from .config import (
     current_active,
     find_account,
     get_accounts,
+    get_token,
     load_config,
     remove_account,
     rename_account,
@@ -355,7 +356,7 @@ def cmd_switch(config: dict, key: str) -> int:
     else:
         env_lines.append(f'export KAGGLE_CONFIG_DIR="{acc.path}"')
 
-    api_token = acc.api_token
+    api_token = get_token(acc)
     if not api_token and acc.auth_type == "oauth":
         api_token = _refresh_oauth_token(acc.path / "credentials.json")
     if api_token:
