@@ -19,3 +19,4 @@ htmlcov/
 pip-wheel-metadata/
 .githooks/
 uv.lock
+kernel-metadata.json

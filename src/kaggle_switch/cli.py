@@ -1087,16 +1087,17 @@ def _detect_code_file(cwd: Path) -> Path | None:
 def cmd_kernel_init(config: dict, args: list[str]) -> int:
     """Interactive wizard to create kernel-metadata.json."""
     import json as _json
+    import questionary
 
     cwd = Path.cwd()
     target = cwd / "kernel-metadata.json"
 
     if target.exists():
-        if not Confirm.ask(
-            f"[bold]{target.name}[/] already exists. Overwrite?",
+        overwrite = questionary.confirm(
+            f"{target.name} already exists. Overwrite?",
             default=False,
-            console=console,
-        ):
+        ).ask()
+        if overwrite is None or not overwrite:
             console.print(info("Aborted."))
             return 0
 
@@ -1111,77 +1112,75 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
 
     # ── prompts ──────────────────────────────────────────────────
     try:
-        title = Prompt.ask("Title", default=auto_title, console=console)
-        slug = Prompt.ask("Kernel slug", default=auto_slug, console=console)
-        lang = Prompt.ask(
-            "Language",
-            default=auto_lang,
-            choices=["python", "r", "rmarkdown"],
-            console=console,
-        )
-        ktype = Prompt.ask(
-            "Kernel type",
-            default=auto_ktype,
-            choices=["script", "notebook"],
-            console=console,
-        )
-
-        cf_default = str(code_file) if code_file else ""
-        code_path = Prompt.ask("Code file", default=cf_default, console=console)
-        if not code_path:
-            console.print(err("Code file is required."))
-            return 1
-
-        is_private = Confirm.ask("Private kernel?", default=True, console=console)
-        enable_gpu = Confirm.ask("Enable GPU?", default=False, console=console)
-        enable_tpu = Confirm.ask("Enable TPU?", default=False, console=console)
-        enable_internet = Confirm.ask("Enable internet?", default=True, console=console)
-
-        dataset_src = Prompt.ask(
-            "Dataset sources (comma-separated, blank=none)", default="",
-            console=console,
-        )
-        comp_src = Prompt.ask(
-            "Competition sources (comma-separated, blank=none)", default="",
-            console=console,
-        )
-        kernel_src = Prompt.ask(
-            "Kernel sources (comma-separated, blank=none)", default="",
-            console=console,
-        )
-        model_src = Prompt.ask(
-            "Model sources (comma-separated, blank=none)", default="",
-            console=console,
-        )
+        answers = questionary.form(
+            title=questionary.text("Title", default=auto_title),
+            slug=questionary.text("Kernel slug", default=auto_slug),
+            lang=questionary.select(
+                "Language",
+                choices=["python", "r", "rmarkdown"],
+                default=auto_lang,
+            ),
+            ktype=questionary.select(
+                "Kernel type",
+                choices=["script", "notebook"],
+                default=auto_ktype,
+            ),
+            code_path=questionary.text(
+                "Code file",
+                default=str(code_file) if code_file else "",
+                validate=lambda v: v.strip() != "" or "Code file is required.",
+            ),
+            is_private=questionary.confirm("Private kernel?", default=True),
+            enable_gpu=questionary.confirm("Enable GPU?", default=False),
+            enable_tpu=questionary.confirm("Enable TPU?", default=False),
+            enable_internet=questionary.confirm("Enable internet?", default=True),
+            dataset_src=questionary.text(
+                "Dataset sources (comma-separated, blank=none)", default="",
+            ),
+            comp_src=questionary.text(
+                "Competition sources (comma-separated, blank=none)", default="",
+            ),
+            kernel_src=questionary.text(
+                "Kernel sources (comma-separated, blank=none)", default="",
+            ),
+            model_src=questionary.text(
+                "Model sources (comma-separated, blank=none)", default="",
+            ),
+        ).ask()
     except (KeyboardInterrupt, EOFError):
         console.print()
         console.print(info("Cancelled."))
         return 1
 
+    if answers is None:
+        console.print()
+        console.print(info("Cancelled."))
+        return 1
+
     # ── build metadata ───────────────────────────────────────────
-    kernel_id = f"{username}/{slug}" if username else slug
+    kernel_id = f"{username}/{answers['slug']}" if username else answers['slug']
     metadata: dict = {
         "id": kernel_id,
-        "title": title,
-        "code_file": code_path,
-        "language": lang,
-        "kernel_type": ktype,
-        "is_private": str(is_private).lower(),
-        "enable_gpu": str(enable_gpu).lower(),
-        "enable_tpu": str(enable_tpu).lower(),
-        "enable_internet": str(enable_internet).lower(),
+        "title": answers["title"],
+        "code_file": answers["code_path"],
+        "language": answers["lang"],
+        "kernel_type": answers["ktype"],
+        "is_private": str(answers["is_private"]).lower(),
+        "enable_gpu": str(answers["enable_gpu"]).lower(),
+        "enable_tpu": str(answers["enable_tpu"]).lower(),
+        "enable_internet": str(answers["enable_internet"]).lower(),
         "machine_shape": "",
         "dataset_sources": [
-            s.strip() for s in dataset_src.split(",") if s.strip()
+            s.strip() for s in answers["dataset_src"].split(",") if s.strip()
         ],
         "competition_sources": [
-            s.strip() for s in comp_src.split(",") if s.strip()
+            s.strip() for s in answers["comp_src"].split(",") if s.strip()
         ],
         "kernel_sources": [
-            s.strip() for s in kernel_src.split(",") if s.strip()
+            s.strip() for s in answers["kernel_src"].split(",") if s.strip()
         ],
         "model_sources": [
-            s.strip() for s in model_src.split(",") if s.strip()
+            s.strip() for s in answers["model_src"].split(",") if s.strip()
         ],
     }
 
@@ -1196,10 +1195,10 @@ def cmd_kernel_init(config: dict, args: list[str]) -> int:
         ok(f"Created [bold]{target.name}[/]"),
         "",
         f"  id:     [cyan]{kernel_id}[/]",
-        f"  title:  [bold]{title}[/]",
-        f"  file:   [bold]{code_path}[/]",
-        f"  lang:   [bold]{lang}[/]  type: [bold]{ktype}[/]",
-        f"  gpu:    {'[green]yes[/]' if enable_gpu else '[dim]no[/]'}  tpu:  {'[green]yes[/]' if enable_tpu else '[dim]no[/]'}",
+        f"  title:  [bold]{answers['title']}[/]",
+        f"  file:   [bold]{answers['code_path']}[/]",
+        f"  lang:   [bold]{answers['lang']}[/]  type: [bold]{answers['ktype']}[/]",
+        f"  gpu:    {'[green]yes[/]' if answers['enable_gpu'] else '[dim]no[/]'}  tpu:  {'[green]yes[/]' if answers['enable_tpu'] else '[dim]no[/]'}",
     ], title="kagitch kernel init"))
     return 0
 
