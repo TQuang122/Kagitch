@@ -75,26 +75,6 @@ def _tty_status(msg: str):
                 pass
 
 
-def _parse_hex(hex: str) -> tuple[int, int, int]:
-    h = hex.lstrip("#")
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-
-
-def _gradient_text(text: str, start_hex: str, end_hex: str, bold: bool = False) -> Text:
-    sr, sg, sb = _parse_hex(start_hex)
-    er, eg, eb = _parse_hex(end_hex)
-    n = max(len(text), 1)
-    result = Text()
-    for i, ch in enumerate(text):
-        t = i / (n - 1) if n > 1 else 0
-        r = int(sr + (er - sr) * t)
-        g = int(sg + (eg - sg) * t)
-        b = int(sb + (eb - sb) * t)
-        style_str = f"bold color(#{r:02x}{g:02x}{b:02x})" if bold else f"color(#{r:02x}{g:02x}{b:02x})"
-        result.append(ch, style=style_str)
-    return result
-
-
 _BANNER_TEXT = "\n".join([
     "██╗  ██╗ █████╗  ██████╗ ██╗████████╗ ██████╗██╗  ██╗",
     "██║ ██╔╝██╔══██╗██╔════╝ ██║╚══██╔══╝██╔════╝██║  ██║",
@@ -259,7 +239,7 @@ def cmd_dashboard(config: dict) -> int:
 
 
 def cmd_current(config: dict) -> int:
-    from .checker import check_all_accounts
+    from .checker import check_account
 
     n = current_active(config)
     if n is None:
@@ -276,23 +256,25 @@ def cmd_current(config: dict) -> int:
 
     if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
         with _tty_status("[bold green]Checking quota..."):
-            all_results = check_all_accounts(config)
+            cr = check_account(acc)
     else:
         with console.status("[bold green]Checking quota...", spinner="dots") as _:
-            all_results = check_all_accounts(config)
-    cur = next((r for r in all_results if r.number == acc.number), None)
+            cr = check_account(acc)
 
     lines = [
         f"  [bold]{acc.name}[/]  ({am_display})",
         "",
         f"  \u25b6  {acc.path}",
     ]
-    if cur and cur.quota_ok:
-        gpu = _render_quota(cur.gpu_remaining)
-        tpu = _render_quota(cur.tpu_remaining)
+    if cr.quota_ok:
+        gpu = _render_quota(cr.gpu_remaining)
+        tpu = _render_quota(cr.tpu_remaining)
         lines.append("")
         lines.append(f"  GPU  {gpu}")
         lines.append(f"  TPU  {tpu}")
+    elif cr.quota_error:
+        lines.append("")
+        lines.append(f"  [{C_ERROR}]\u2717[/]  {cr.quota_error[:60]}")
     console.print(card(lines, title=f"#{acc.number} Active"))
     return 0
 
@@ -932,6 +914,14 @@ def cmd_check(config: dict) -> int:
             summary_lines.append(
                 f"[{C_WARN}]\u26a0[/] {legacy_count} account{'s' if legacy_count > 1 else ''} use Legacy Key"
             )
+        # Suggest switching if a different account has more GPU quota
+        if any_quota_ok and active_name:
+            best_gpu = max(results, key=lambda r: _parse_quota(r.gpu_remaining) or 0)
+            if best_gpu.name != active_name and best_gpu.quota_ok:
+                switch_num = best_gpu.number
+                summary_lines.append(
+                    f"[{C_INFO}]\u2192[/] Try [bold]kagitch {switch_num}[/] for more GPU quota ({best_gpu.gpu_remaining})"
+                )
         console.print()
         console.print(panel_body("Summary", "\n".join(summary_lines), C_OK))
     return 0
@@ -1041,6 +1031,7 @@ def cmd_patch(config: dict, args: list[str]) -> int:
         target = target / "kernel-metadata.json"
     if not target.exists():
         console.print(err(f"[bold]{target.name}[/] not found in {target.parent}"))
+        console.print(f"  [dim]Create one with: kaggle kernels init[/]")
         return 1
     username = _active_username(config)
     if not username:
