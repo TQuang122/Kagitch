@@ -333,12 +333,14 @@ def cmd_switch(config: dict, key: str) -> int:
         else:
             console.print(err(f"No accounts configured — use [bold]kagitch add <name>[/]"))
         return 1
+    _apply_account_env(acc)
+
+    # Build env lines for shell wrapper mode (printed to stdout for eval)
     env_lines = []
     if acc.is_default:
         env_lines.append("unset KAGGLE_CONFIG_DIR")
     else:
         env_lines.append(f'export KAGGLE_CONFIG_DIR="{acc.path}"')
-
     api_token = get_token(acc)
     if not api_token and acc.auth_type == "oauth":
         api_token = _refresh_oauth_token(acc.path / "credentials.json")
@@ -347,23 +349,9 @@ def cmd_switch(config: dict, key: str) -> int:
     else:
         env_lines.append("unset KAGGLE_API_TOKEN")
 
-    machine_mode = os.environ.get("KAGITCH_SHELL_WRAPPER") == "1"
-    if machine_mode:
+    if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
         for line in env_lines:
             print(line)
-
-    # OAuth accounts: copy credentials.json to ~/.kaggle/ since KAGGLE_CONFIG_DIR
-    # does not redirect it.
-    creds_dst = Path.home() / ".kaggle" / "credentials.json"
-    if acc.auth_type == "oauth":
-        creds_src = acc.path / "credentials.json"
-        if creds_src.exists():
-            creds_dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(creds_src, creds_dst)
-            if sys.platform != "win32":
-                creds_dst.chmod(0o600)
-    elif creds_dst.exists():
-        creds_dst.unlink()
 
     am = _auth_method(acc.path)
     am_display = _render_auth(am)
@@ -382,7 +370,7 @@ def cmd_switch(config: dict, key: str) -> int:
         lines.append("")
         lines.append(patch_line)
 
-    if machine_mode:
+    if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
         from rich.console import Console as _TtyConsole
         _TtyConsole(file=sys.stderr, force_terminal=True, highlight=False).print(
             card(lines, title=f"#{acc.number} Switched")
@@ -1536,6 +1524,64 @@ def _parse_logs_args(
     return positional, follow, line_limit, stream_filter, show_progress
 
 
+def _apply_account_env(acc: Account) -> None:
+    """Apply *acc* credentials to the current process environment in-place."""
+    if acc.is_default:
+        os.environ.pop("KAGGLE_CONFIG_DIR", None)
+    else:
+        os.environ["KAGGLE_CONFIG_DIR"] = str(acc.path)
+
+    api_token = get_token(acc)
+    if not api_token and acc.auth_type == "oauth":
+        api_token = _refresh_oauth_token(acc.path / "credentials.json")
+    if api_token:
+        os.environ["KAGGLE_API_TOKEN"] = api_token
+    else:
+        os.environ.pop("KAGGLE_API_TOKEN", None)
+
+    # OAuth: copy credentials.json to ~/.kaggle/ since KAGGLE_CONFIG_DIR
+    # does not redirect it.
+    creds_dst = Path.home() / ".kaggle" / "credentials.json"
+    if acc.auth_type == "oauth":
+        creds_src = acc.path / "credentials.json"
+        if creds_src.exists():
+            creds_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(creds_src, creds_dst)
+            if sys.platform != "win32":
+                creds_dst.chmod(0o600)
+    elif creds_dst.exists():
+        creds_dst.unlink()
+
+
+def _auto_switch_for_kernel(config: dict, kernel_slug: str) -> bool:
+    """Temporarily switch to the account that owns *kernel_slug*.
+
+    Returns True when a switch was performed.
+    """
+    if "/" not in kernel_slug:
+        return False
+
+    owner = kernel_slug.split("/")[0]
+
+    acc = find_account(config, owner)
+    if acc is None:
+        for a in get_accounts(config):
+            if _active_username_from_account(a) == owner:
+                acc = a
+                break
+
+    if acc is None:
+        return False
+
+    active_num = current_active(config)
+    if active_num == acc.number:
+        return False
+
+    _apply_account_env(acc)
+    ok(f"Auto-switched to [bold]{acc.name}[/] for [cyan]{kernel_slug}[/]")
+    return True
+
+
 def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
     """Rich-formatted kernel logs viewer."""
     from .logs_viewer import (
@@ -1552,6 +1598,8 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
         return 0 if positional else 1
 
     kernel = positional[0]
+
+    _auto_switch_for_kernel(config, kernel)
 
     with _tty_status(f"[bold green]Fetching logs for [cyan]{kernel}[/]..."):
         result = fetch_logs(kernel)
