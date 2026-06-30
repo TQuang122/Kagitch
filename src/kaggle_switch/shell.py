@@ -178,19 +178,14 @@ kagitch() {{
   local rc
 
   if [[ "$known_cmds" =~ " $1 " ]]; then
-    KAGITCH_SHELL_WRAPPER=1 command kagitch "$@" 2>&1 | tee "$tmp"
+    KAGITCH_SHELL_WRAPPER=1 command kagitch "$@" > "$tmp" 2>&1
   else
-    KAGITCH_SHELL_WRAPPER=1 command kagitch switch "$1" 2>&1 | tee "$tmp"
+    KAGITCH_SHELL_WRAPPER=1 command kagitch switch "$1" > "$tmp" 2>&1
   fi
-
-  # Get exit code of kagitch (first command in pipeline)
-  if [[ -n ${{ZSH_VERSION+z}} ]]; then
-    rc=$pipestatus[1]
-  else
-    rc=${{PIPESTATUS[0]}}
-  fi
+  rc=$?
 
   if [[ $rc -ne 0 ]]; then
+    cat "$tmp"
     rm -f "$tmp"
     return $rc
   fi
@@ -198,6 +193,8 @@ kagitch() {{
   while IFS= read -r line; do
     if [[ "$line" == "unset "* ]] || [[ "$line" == "export "* ]]; then
       eval "$line"
+    else
+      echo "$line"
     fi
   done < "$tmp"
   rm -f "$tmp"
