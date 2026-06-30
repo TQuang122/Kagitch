@@ -780,7 +780,6 @@ def cmd_init(args: list[str] | None = None) -> int:
         if rc and rc.exists():
             content = rc.read_text()
             if "kagitch" in content and "shellpath" in content:
-                console.print(f"[{C_INFO}]\u25b6[/] Shell integration already exists in {rc}")
                 _reload(shell)
                 return 0
         console.print(err("No existing shell integration found. Run [bold]kagitch init[/] first."))
@@ -815,19 +814,59 @@ def cmd_init(args: list[str] | None = None) -> int:
 
 
 def _reload(shell: str) -> None:
+    """Reload shell integration.
+
+    On Unix this exec's a new login shell so the integration takes effect
+    immediately.  On Windows it prints the reload command for PowerShell.
+    """
     if shell == "powershell":
         ps_profile = rc_file_for_shell("powershell")
         if ps_profile:
-            console.print(f"  Run: [bold]. {ps_profile}[/]")
+            console.print()
+            console.print(Panel(
+                f"[bold cyan]. {ps_profile}[/]\n\n"
+                "Copy & paste the line above into your PowerShell session,\n"
+                "or start a new terminal window.",
+                title="Reload PowerShell Profile",
+                border_style="green",
+            ))
         else:
-            console.print("  Restart your PowerShell session.")
+            console.print("[yellow]Restart your PowerShell session to activate.[/]")
         return
 
     rc = rc_file_for_shell(shell)
-    if rc:
-        console.print(f"  Run: [bold]source {rc}[/]")
+    if not rc:
+        console.print("[yellow]Restart your shell to activate.[/]")
+        return
+
+    # When the shell wrapper redirects stdout/stderr to a temp file,
+    # we must redirect them back to /dev/tty before exec — otherwise
+    # the new login shell inherits the temp-file fd and runs non-interactively.
+    if os.environ.get("KAGITCH_SHELL_WRAPPER"):
+        try:
+            tty_fd = os.open("/dev/tty", os.O_RDWR)
+            os.dup2(tty_fd, 1)
+            os.dup2(tty_fd, 2)
+            os.close(tty_fd)
+            sys.stdout = os.fdopen(1, "w")
+            sys.stderr = os.fdopen(2, "w")
+            con = Console(file=sys.stdout, force_terminal=True, highlight=False)
+        except OSError:
+            con = console
     else:
-        console.print("  Restart your shell to activate.")
+        con = console
+
+    con.print()
+    con.print(Panel(
+        f"  [bold cyan]source {rc}[/]\n"
+        f"  [bold]exec {shell} -l[/]        \u2014 restart with new integration",
+        title="\u2705 Shell Integration Ready",
+        border_style="green",
+    ))
+    con.print(f"[green]Starting new {shell} session...[/]")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execvp(shell, [shell, "-l"])
 
 
 def cmd_check(config: dict) -> int:
@@ -1457,6 +1496,93 @@ def cmd_update() -> int:
     return 0
 
 
+# ── kernel logs ─────────────────────────────────────────────────
+
+
+def _parse_logs_args(
+    rest: list[str],
+) -> tuple[list[str], bool, int, str | None, bool]:
+    """Parse args for ``kagitch kernel logs``.
+
+    Returns (positional_args, follow, line_limit, stream_filter, show_progress).
+    """
+    follow = False
+    line_limit = 0
+    stream_filter: str | None = None
+    show_progress = False
+    positional: list[str] = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("-f", "--follow"):
+            follow = True
+        elif a in ("-n",):
+            i += 1
+            try:
+                line_limit = int(rest[i]) if i < len(rest) else 0
+            except ValueError:
+                line_limit = 0
+        elif a == "--stdout":
+            stream_filter = "stdout"
+        elif a == "--stderr":
+            stream_filter = "stderr"
+        elif a == "--show-progress":
+            show_progress = True
+        elif a in ("--help", "-h", "help"):
+            positional.append("--help")
+        else:
+            positional.append(a)
+        i += 1
+    return positional, follow, line_limit, stream_filter, show_progress
+
+
+def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
+    """Rich-formatted kernel logs viewer."""
+    from .logs_viewer import (
+        fetch_logs,
+        fetch_logs_follow,
+        render_logs_help,
+        render_result,
+    )
+
+    positional, follow, line_limit, stream_filter, show_progress = _parse_logs_args(rest)
+
+    if not positional or "--help" in positional:
+        render_logs_help()
+        return 0 if positional else 1
+
+    kernel = positional[0]
+
+    with _tty_status(f"[bold green]Fetching logs for [cyan]{kernel}[/]..."):
+        result = fetch_logs(kernel)
+
+    if result.error:
+        console.print(f"[red]\u2718 {result.error}[/]")
+        return 1
+
+    if follow:
+        from .logs_viewer import render_logs
+        if result.entries:
+            render_logs(result.entries, show_progress=show_progress)
+        try:
+            for new_batch in fetch_logs_follow(kernel, on_status=lambda r: None):
+                if stream_filter:
+                    new_batch = [e for e in new_batch if e.stream == stream_filter]
+                if new_batch:
+                    render_logs(new_batch, show_progress=show_progress)
+        except KeyboardInterrupt:
+            console.print()
+            console.print("[dim]\u2718 Interrupted by user[/]")
+        return 0
+
+    if stream_filter:
+        result.entries = [e for e in result.entries if e.stream == stream_filter]
+    if line_limit > 0:
+        result.entries = result.entries[-line_limit:]
+    render_result(result, show_progress=show_progress)
+    return 0
+
+
 def main() -> int:
     try:
         return _main()
@@ -1529,7 +1655,9 @@ def _main() -> int:
                 _kernel_init_help()
                 return 0
             return cmd_kernel_init(config, rest[1:])
-        console.print(err("Usage: kagitch kernel init"))
+        if rest and rest[0] == "logs":
+            return cmd_kernel_logs(config, rest[1:])
+        console.print(err("Usage: kagitch kernel init | kernel logs <kernel>"))
         return 1
 
     if cmd == "doctor":
