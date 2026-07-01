@@ -748,7 +748,12 @@ class TestKernelInit:
 
         assert "bg:ansigreen" in rules["highlighted"]
         assert "noinherit" in rules["selected"]
-        assert "bg:ansigreen" in rules["selected"]
+        assert "bg:" not in rules["selected"]
+        # highlighted must be defined after selected so it takes precedence on cursor row
+        slist = style.style_rules
+        h_idx = next(i for i, (n, _) in enumerate(slist) if n == "highlighted")
+        s_idx = next(i for i, (n, _) in enumerate(slist) if n == "selected")
+        assert h_idx > s_idx
 
     def test_basic_creates_metadata(self, temp_env, capsys, monkeypatch, tmp_path):
         """kernel init creates kernel-metadata.json with correct defaults."""
