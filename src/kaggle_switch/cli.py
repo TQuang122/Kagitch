@@ -18,6 +18,7 @@ from rich.traceback import Traceback
 
 from . import __version__
 from .config import (
+    Account,
     _next_account_number,
     add_account,
     current_active,
@@ -1489,12 +1490,13 @@ def cmd_update() -> int:
 
 def _parse_logs_args(
     rest: list[str],
-) -> tuple[list[str], bool, int, str | None, bool]:
+) -> tuple[list[str], bool, int, str | None, bool, bool]:
     """Parse args for ``kagitch kernel logs``.
 
-    Returns (positional_args, follow, line_limit, stream_filter, show_progress).
+    Returns (positional_args, follow, line_limit, stream_filter, show_progress, browse).
     """
     follow = False
+    browse = False
     line_limit = 0
     stream_filter: str | None = None
     show_progress = False
@@ -1504,6 +1506,8 @@ def _parse_logs_args(
         a = rest[i]
         if a in ("-f", "--follow"):
             follow = True
+        elif a in ("-b", "--browse"):
+            browse = True
         elif a in ("-n",):
             i += 1
             try:
@@ -1521,7 +1525,7 @@ def _parse_logs_args(
         else:
             positional.append(a)
         i += 1
-    return positional, follow, line_limit, stream_filter, show_progress
+    return positional, follow, line_limit, stream_filter, show_progress, browse
 
 
 def _apply_account_env(acc: Account) -> None:
@@ -1587,15 +1591,21 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
     from .logs_viewer import (
         fetch_logs,
         fetch_logs_follow,
+        render_logs,
         render_logs_help,
         render_result,
     )
 
-    positional, follow, line_limit, stream_filter, show_progress = _parse_logs_args(rest)
+    positional, follow, line_limit, stream_filter, show_progress, browse = _parse_logs_args(rest)
 
-    if not positional or "--help" in positional:
+    enter_browse = browse or (not positional and "--help" not in positional)
+
+    if enter_browse:
+        return _browse_kernel_logs(config)
+
+    if "--help" in positional:
         render_logs_help()
-        return 0 if positional else 1
+        return 0
 
     kernel = positional[0]
 
@@ -1609,7 +1619,6 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
         return 1
 
     if follow:
-        from .logs_viewer import render_logs
         if result.entries:
             render_logs(result.entries, show_progress=show_progress)
         try:
@@ -1628,6 +1637,263 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
     if line_limit > 0:
         result.entries = result.entries[-line_limit:]
     render_result(result, show_progress=show_progress)
+    return 0
+
+
+def _terminal_select(
+    options: list[str],
+    default_index: int = 0,
+) -> int | None:
+    """Arrow-key navigable terminal selection list.
+
+    Shows options on stderr so it works in both normal and shell-wrapper mode.
+    Handles up/down/enter/escape/ctrl+c/q.
+
+    Args:
+        options: Display strings for each option.
+        default_index: Index to highlight initially (0-based).
+
+    Returns:
+        Selected index (0-based), or None if cancelled.
+    """
+    n = len(options)
+    if n == 0:
+        return None
+    if n == 1:
+        return 0
+
+    sel = max(0, min(default_index, n - 1))
+
+    # Open /dev/tty for interactive output when stderr is redirected
+    # (shell wrapper mode redirects stderr to a temp file)
+    tty_out = None
+    out = sys.stderr
+    if not sys.stderr.isatty():
+        try:
+            tty_out = open("/dev/tty", "w")
+            out = tty_out
+        except OSError:
+            pass
+
+    def _lines() -> list[str]:
+        return [
+            f"  \u25b6 {opt}" if i == sel else f"    {opt}"
+            for i, opt in enumerate(options)
+        ]
+
+    def _draw(lines: list[str]) -> None:
+        for l in lines:
+            out.write(f"\r\x1b[K{l}\n")
+        out.flush()
+
+    def _cleanup(nlines: int) -> None:
+        out.write(f"\x1b[{nlines}A\x1b[J")
+        out.flush()
+
+    try:
+        import termios
+        import tty
+    except ImportError:
+        if tty_out:
+            tty_out.close()
+        return default_index if 0 <= default_index < n else 0
+
+    if not sys.stdin.isatty():
+        if tty_out:
+            tty_out.close()
+        return default_index if 0 <= default_index < n else 0
+
+    fd = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+    cur_lines: list[str] = []
+
+    try:
+        tty.setraw(fd)
+        cur_lines = _lines()
+        _draw(cur_lines)
+
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                rest = sys.stdin.read(2)
+                if rest == "[A":
+                    sel = (sel - 1) % n
+                elif rest == "[B":
+                    sel = (sel + 1) % n
+                else:
+                    continue
+            elif ch in ("\r", "\n"):
+                break
+            elif ch == "\x03":
+                raise KeyboardInterrupt
+            elif ch in ("q",):
+                sel = -1
+                break
+            else:
+                continue
+
+            _cleanup(len(cur_lines))
+            cur_lines = _lines()
+            _draw(cur_lines)
+    except (KeyboardInterrupt, EOFError):
+        sel = -1
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+        if cur_lines:
+            _cleanup(len(cur_lines))
+        if tty_out:
+            tty_out.close()
+
+    return None if sel < 0 else sel
+
+
+def _select_account_interactive(config: dict) -> Account | None:
+    """Prompt user to pick an account (arrow keys in TTY, fallback prompt in pipes)."""
+    accounts = get_accounts(config)
+    if not accounts:
+        console.print(err("No accounts configured - use [bold]kagitch add <name>[/]"))
+        return None
+
+    active = current_active(config)
+
+    card_options: list[str] = []
+    select_options: list[str] = []
+    for acc in accounts:
+        label = f"{acc.number}. {acc.name}"
+        card_label = label
+        if acc.number == active:
+            card_label += f"  [{C_OK}]active[/]"
+        card_options.append(card_label)
+        if acc.number == active:
+            select_options.append(f"{label} (active)")
+        else:
+            select_options.append(label)
+
+    active_idx = 0
+    for i, acc in enumerate(accounts):
+        if acc.number == active:
+            active_idx = i
+            break
+
+    if sys.stdin.isatty():
+        idx = _terminal_select(select_options, default_index=active_idx)
+        if idx is None:
+            console.print(info("Cancelled."))
+            return None
+        return accounts[idx]
+
+    err_con = Console(file=sys.stderr, force_terminal=True, highlight=False)
+    err_con.print(card(card_options, title="Select Account"))
+    p = str(active or accounts[0].number)
+    err_con.print(f"Account [{p}]: ", end="")
+    sys.stderr.flush()
+    try:
+        choice = input()
+    except (EOFError, KeyboardInterrupt):
+        console.print(info("Cancelled."))
+        return None
+    choice = choice.strip() or str(active or accounts[0].number)
+    acc = find_account(config, choice)
+    if acc is None:
+        pairs = ", ".join(f"{a.number} ({a.name})" for a in accounts)
+        console.print(err(f"Invalid account: {choice}"))
+        console.print(f"  Available: {pairs}")
+    return acc
+
+
+def _browse_kernel_logs(config: dict) -> int:
+    """Interactive browse: pick account -> pick kernel -> show logs."""
+    from .logs_viewer import (
+        fetch_logs,
+        list_kernels,
+        render_result,
+    )
+
+    acc = _select_account_interactive(config)
+    if acc is None:
+        return 1
+
+    console.print()
+    _apply_account_env(acc)
+    ok(f"Using [bold]{acc.name}[/]")
+
+    with _tty_status(f"[bold green]Fetching kernels for [cyan]{acc.name}[/]..."):
+        kernels = list_kernels(_active_username_from_account(acc))
+
+    if not kernels:
+        console.print(err(f"No kernels found for account [bold]{acc.name}[/]"))
+        return 1
+
+    _STATUS_STYLES = {
+        "COMPLETE": "green",
+        "complete": "green",
+        "ERROR": "bold red",
+        "error": "bold red",
+        "RUNNING": "yellow",
+        "running": "yellow",
+        "QUEUED": "dim",
+        "queued": "dim",
+        "PENDING": "dim",
+        "pending": "dim",
+    }
+
+    table = Table(
+        title=f"Kernels for [bold]{acc.name}[/]",
+        header_style="bold cyan",
+        border_style="blue",
+    )
+    table.add_column("#", style="dim", no_wrap=True)
+    table.add_column("Slug", style="cyan", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Last Run", style="dim")
+    for i, k in enumerate(kernels, 1):
+        status_str = k.status if k.status else "-"
+        status_style = _STATUS_STYLES.get(k.status, "dim")
+        status_t = Text(status_str, style=status_style) if k.status else Text("-", style="dim")
+        table.add_row(str(i), k.ref, k.title or "-", status_t, k.last_run_time)
+
+    if sys.stderr.isatty():
+        console.print(table)
+    else:
+        try:
+            with open("/dev/tty", "w") as tty:
+                tty_console = Console(file=tty, force_terminal=True)
+                tty_console.print(table)
+        except OSError:
+            console.print(table)
+
+    _ANSI_STATUS_COLORS = {
+        "COMPLETE": "32",
+        "complete": "32",
+        "ERROR": "1;31",
+        "error": "1;31",
+        "RUNNING": "33",
+        "running": "33",
+    }
+    kernel_options = []
+    for i, k in enumerate(kernels):
+        ref_label = f"{i+1}. \x1b[36m{k.ref}\x1b[0m"
+        if k.status:
+            ansi_color = _ANSI_STATUS_COLORS.get(k.status, "90")
+            ref_label += f"  \x1b[{ansi_color}m({k.status})\x1b[0m"
+        kernel_options.append(ref_label)
+    idx = _terminal_select(kernel_options)
+    if idx is None:
+        console.print(info("Cancelled."))
+        return 1
+
+    kernel = kernels[idx].ref
+    console.print()
+
+    with _tty_status(f"[bold green]Fetching logs for [cyan]{kernel}[/]..."):
+        result = fetch_logs(kernel)
+
+    if result.error:
+        console.print(f"[red]\u2718 {result.error}[/]")
+        return 1
+
+    render_result(result)
     return 0
 
 

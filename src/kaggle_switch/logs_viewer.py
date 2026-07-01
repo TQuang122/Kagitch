@@ -1,6 +1,7 @@
 """Fetch and render Kaggle kernel logs with Rich formatting."""
 from __future__ import annotations
 
+import concurrent.futures
 import re
 import subprocess  # noqa: S404 — fallback when kaggle SDK unavailable
 import threading
@@ -24,7 +25,8 @@ _ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 # ── Data model ─────────────────────────────────────────────────
 
-
+# Matches output like: owner/slug has status "KernelWorkerStatus.COMPLETE"
+_KERNEL_STATUS_RE = re.compile(r'has status "KernelWorkerStatus\.(\w+)"')
 
 
 @dataclass
@@ -41,6 +43,104 @@ class LogFetchResult:
     entries: list[LogEntry] = field(default_factory=list)
     status: str = ""         # kernel status string (best-effort)
     error: str = ""          # error message if kaggle failed
+
+
+# ── Kernel list (for browse mode) ─────────────────────────────
+
+
+@dataclass
+class KernelInfo:
+    """Summary info for a single kernel from list output."""
+    ref: str          # "owner/slug"
+    title: str
+    status: str       # "running", "complete", "error", etc.
+    last_run_time: str
+
+
+def get_kernel_status(ref: str) -> str:
+    """Fetch status for a single kernel via ``kaggle kernels status <ref>``.
+
+    Returns one of: COMPLETE, RUNNING, QUEUED, ERROR, PENDING, or empty
+    string on failure.
+    """
+    try:
+        proc = subprocess.run(
+            ["kaggle", "kernels", "status", ref],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    m = _KERNEL_STATUS_RE.search(proc.stdout)
+    return m.group(1) if m else ""
+
+
+def list_kernels(owner: str) -> list[KernelInfo]:
+    """List kernels for *owner* via ``kaggle kernels list`` JSON output.
+
+    Returns a list of KernelInfo sorted by last run time (newest first),
+    with live status fetched in parallel from ``kaggle kernels status``.
+    Returns an empty list on any error.  Skips private kernels (empty ref).
+    """
+    import json as _json
+
+    try:
+        proc = subprocess.run(
+            ["kaggle", "kernels", "list", "--user", owner, "--format", "json", "--page-size", "100"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    if proc.returncode != 0:
+        return []
+
+    stdout = proc.stdout.strip()
+    if not stdout:
+        return []
+
+    try:
+        data = _json.loads(stdout)
+    except _json.JSONDecodeError:
+        return []
+
+    if not isinstance(data, list):
+        return []
+
+    results: list[KernelInfo] = []
+    for entry in data:
+        ref = (entry.get("ref") or "").strip()
+        if not ref:
+            # Skip private kernels (ref is empty)
+            continue
+        title = (entry.get("title") or "").strip()
+        last_run = (entry.get("lastRunTime") or "").strip()
+        results.append(KernelInfo(ref=ref, title=title, status="", last_run_time=last_run))
+
+    # Fetch live statuses in parallel
+    refs = [k.ref for k in results]
+    status_map: dict[str, str] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        future_map = {pool.submit(get_kernel_status, ref): ref for ref in refs}
+        for future in concurrent.futures.as_completed(future_map):
+            ref = future_map[future]
+            try:
+                s = future.result()
+            except Exception:
+                s = ""
+            if s:
+                status_map[ref] = s
+
+    for k in results:
+        k.status = status_map.get(k.ref, "")
+
+    # Sort: newest lastRunTime first (those without a time go last)
+    def _sort_key(ki: KernelInfo) -> str:
+        return ki.last_run_time or ""
+
+    results.sort(key=_sort_key, reverse=True)
+    return results
 
 
 # ── Fetch ──────────────────────────────────────────────────────
@@ -425,10 +525,12 @@ def render_logs_help() -> None:
     style_console.print("  [cyan]--stdout[/]        Show only stdout lines")
     style_console.print("  [cyan]--stderr[/]        Show only stderr lines")
     style_console.print("  [cyan]--show-progress[/] Show progress-bar lines (filtered by default)")
+    style_console.print("  [cyan]-b, --browse[/]    Interactive kernel picker (no <kernel> argument)")
     style_console.print("  [cyan]-h, --help[/]     Show this help")
     style_console.print()
     style_console.print("[bold]Examples:[/bold]")
     style_console.print("  [dim]kagitch kernel logs my-kernel[/]")
     style_console.print("  [dim]kagitch kernel logs owner/my-kernel -f[/]")
+    style_console.print("  [dim]kagitch kernel logs --browse[/]")
     style_console.print("  [dim]kagitch kernel logs my-kernel --stderr[/]")
     style_console.print("  [dim]kagitch kernel logs my-kernel --show-progress[/]")
