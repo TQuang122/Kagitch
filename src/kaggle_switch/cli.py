@@ -1147,7 +1147,7 @@ def _kernel_style() -> object:
         ("answer", "fg:ansigreen"),
         ("pointer", "fg:ansicyan bold"),
         ("highlighted", "fg:ansiblack bg:ansigreen"),
-        ("selected", "noinherit fg:default"),
+        ("selected", "noinherit fg:default bg:ansigreen"),
         ("instruction", "fg:ansibrightblack"),
         ("text", "fg:default"),
         ("validation", "fg:ansired bold"),

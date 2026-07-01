@@ -748,7 +748,7 @@ class TestKernelInit:
 
         assert "bg:ansigreen" in rules["highlighted"]
         assert "noinherit" in rules["selected"]
-        assert "bg:" not in rules["selected"]
+        assert "bg:ansigreen" in rules["selected"]
 
     def test_basic_creates_metadata(self, temp_env, capsys, monkeypatch, tmp_path):
         """kernel init creates kernel-metadata.json with correct defaults."""
