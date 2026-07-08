@@ -2,16 +2,14 @@
 from __future__ import annotations
 
 import json
-import os
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-import kaggle_switch.logs_viewer as lv
 from kaggle_switch.commands import kernel as kn
-from kaggle_switch.config import Account, load_config, save_config
-from kaggle_switch.commands.switch import _apply_account_env
+from kaggle_switch.config import Account
 
 
 # ── _auto_patch_metadata ────────────────────────────────────────
@@ -206,6 +204,27 @@ class TestActiveUsername:
         config: dict = {"accounts": {}}
         result = kn._active_username(config)
         assert result == "defaultuser"
+
+    def test_current_active_none_uses_default_bad_credentials(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel.current_active", lambda config: None)
+        default = tmp_path / ".kaggle"
+        default.mkdir(parents=True)
+        (default / "credentials.json").write_text("bad-json")
+        config: dict = {"accounts": {"1": {"name": "acc1", "config_dir": "acc1"}}}
+        result = kn._active_username(config)
+        assert result is None
+
+    def test_current_active_none_uses_default_kaggle_json_oserror(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel.current_active", lambda config: None)
+        default = tmp_path / ".kaggle"
+        default.mkdir(parents=True)
+        (default / "kaggle.json").write_text('{"username": "defaultuser"}')
+        config: dict = {"accounts": {"1": {"name": "acc1", "config_dir": "acc1"}}}
+        with patch.object(Path, "read_text", side_effect=OSError):
+            result = kn._active_username(config)
+        assert result is None
 
 
 # ── _parse_logs_args ────────────────────────────────────────────
@@ -953,6 +972,51 @@ class TestBrowseKernelLogs:
         with patch("kaggle_switch.commands.kernel.console.print"):
             rc = kn._browse_kernel_logs({"accounts": {}})
         assert rc == 0
+
+    def test_happy_path_prints_table_to_console_when_tty(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        acc = Account(number=1, name="testacc", config_dir="testacc")
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.display._select_account_interactive",
+            lambda c: acc,
+        )
+        monkeypatch.setattr("kaggle_switch.commands.kernel._apply_account_env", lambda a: None)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", lambda msg: nullcontext())
+        monkeypatch.setattr("kaggle_switch.commands.kernel._active_username_from_account", lambda a: a.name)
+        monkeypatch.setattr(kn.sys.stderr, "isatty", lambda: True)
+        kernels = [MockKernelInfo(ref="testacc/kernel1", title="K1", status="COMPLETE", last_run_time="2024-01-01")]
+        monkeypatch.setattr("kaggle_switch.logs_viewer.list_kernels", lambda owner: kernels)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select", lambda options: 0)
+        monkeypatch.setattr("kaggle_switch.logs_viewer.fetch_logs", lambda k: type("R", (), {"error": "", "entries": []})())
+        monkeypatch.setattr("kaggle_switch.logs_viewer.render_result", lambda r, **kw: None)
+        with patch("kaggle_switch.commands.kernel.console.print") as mock_print:
+            rc = kn._browse_kernel_logs({"accounts": {}})
+        assert rc == 0
+        assert any(call.args and getattr(call.args[0], "columns", None) is not None for call in mock_print.call_args_list)
+
+    def test_happy_path_prints_table_via_dev_tty_when_not_tty(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        acc = Account(number=1, name="testacc", config_dir="testacc")
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.display._select_account_interactive",
+            lambda c: acc,
+        )
+        monkeypatch.setattr("kaggle_switch.commands.kernel._apply_account_env", lambda a: None)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", lambda msg: nullcontext())
+        monkeypatch.setattr("kaggle_switch.commands.kernel._active_username_from_account", lambda a: a.name)
+        monkeypatch.setattr(kn.sys.stderr, "isatty", lambda: False)
+        kernels = [MockKernelInfo(ref="testacc/kernel1", title="K1", status="COMPLETE", last_run_time="2024-01-01")]
+        monkeypatch.setattr("kaggle_switch.logs_viewer.list_kernels", lambda owner: kernels)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select", lambda options: 0)
+        monkeypatch.setattr("kaggle_switch.logs_viewer.fetch_logs", lambda k: type("R", (), {"error": "", "entries": []})())
+        monkeypatch.setattr("kaggle_switch.logs_viewer.render_result", lambda r, **kw: None)
+        tty_console = MagicMock()
+        with patch("kaggle_switch.commands.kernel.Console", return_value=tty_console) as mock_console_cls, \
+             patch("builtins.open", mock_open()):
+            rc = kn._browse_kernel_logs({"accounts": {}})
+        assert rc == 0
+        mock_console_cls.assert_called_once()
+        tty_console.print.assert_called()
 
     def test_terminal_select_returns_none(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
