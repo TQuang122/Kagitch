@@ -9,6 +9,7 @@ import pytest
 
 from kaggle_switch import cli
 from kaggle_switch import config as cfg
+from kaggle_switch.commands.kernel import _kernel_style
 
 
 @pytest.fixture
@@ -500,8 +501,8 @@ class TestDoctor:
         tmp_path, _ = temp_env
         rc_file = tmp_path / ".zshrc"
         rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
-        monkeypatch.setattr("kaggle_switch.cli.detect_shell", lambda: "zsh")
-        monkeypatch.setattr("kaggle_switch.cli.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
 
         config = cfg.load_config()
@@ -530,8 +531,8 @@ class TestDoctor:
         tmp_path, _ = temp_env
         rc_file = tmp_path / ".zshrc"
         rc_file.write_text('')
-        monkeypatch.setattr("kaggle_switch.cli.detect_shell", lambda: "zsh")
-        monkeypatch.setattr("kaggle_switch.cli.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: None)
 
         rc, out = run_cli("doctor", capsys=capsys)
@@ -545,8 +546,8 @@ class TestDoctor:
         tmp_path, _ = temp_env
         rc_file = tmp_path / ".zshrc"
         rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
-        monkeypatch.setattr("kaggle_switch.cli.detect_shell", lambda: "zsh")
-        monkeypatch.setattr("kaggle_switch.cli.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
 
         config = cfg.load_config()
@@ -565,8 +566,8 @@ class TestDoctor:
         tmp_path, _ = temp_env
         rc_file = tmp_path / ".zshrc"
         rc_file.write_text('')
-        monkeypatch.setattr("kaggle_switch.cli.detect_shell", lambda: "zsh")
-        monkeypatch.setattr("kaggle_switch.cli.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: None)
 
         rc, out = run_cli("doctor", capsys=capsys)
@@ -700,7 +701,7 @@ class TestCheckSwitchRecommendation:
         r2 = self._make_check_result("2", "beta", "4.00h")
 
         with patch("kaggle_switch.checker.check_all_accounts", return_value=[r1, r2]), \
-             patch("kaggle_switch.cli.current_active", return_value=None):
+             patch("kaggle_switch.commands.doctor.current_active", return_value=None):
             rc, out = run_cli("check", capsys=capsys)
 
         assert rc == 0
@@ -731,7 +732,7 @@ class TestKernelInit:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "kernel-metadata.json").write_text("{}")
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions, \
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions, \
              patch("questionary.confirm") as mock_confirm:
             rc, out = run_cli("kernel", "init", "--help", capsys=capsys)
 
@@ -743,7 +744,7 @@ class TestKernelInit:
 
     def test_select_highlight_tracks_pointer(self):
         """kernel init select style highlights the cursor row, not the default value."""
-        style = cli._kernel_style()
+        style = _kernel_style()
         rules = dict(style.style_rules)
 
         assert "bg:ansigreen" in rules["highlighted"]
@@ -781,7 +782,7 @@ class TestKernelInit:
             "model_src": "",
         }
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
@@ -824,7 +825,7 @@ class TestKernelInit:
             "model_src": "",
         }
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
@@ -877,7 +878,7 @@ class TestKernelInit:
         }
 
         with patch("questionary.confirm") as mock_confirm, \
-             patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+             patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_confirm.return_value.ask.return_value = True
             mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
@@ -894,7 +895,7 @@ class TestKernelInit:
 
         monkeypatch.chdir(tmp_path)
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_questions.side_effect = KeyboardInterrupt
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
@@ -909,7 +910,7 @@ class TestKernelInit:
 
         monkeypatch.chdir(tmp_path)
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_questions.return_value = {}
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
@@ -927,7 +928,7 @@ class TestKernelInit:
         monkeypatch.chdir(tmp_path)
 
         with patch("questionary.confirm") as mock_confirm, \
-             patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+             patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_confirm.return_value.ask.return_value = True
             mock_questions.return_value = {}
             rc, out = run_cli("kernel", "init", capsys=capsys)
@@ -969,7 +970,7 @@ class TestKernelInit:
             "model_src": "org/model1",
         }
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
@@ -1009,7 +1010,7 @@ class TestKernelInit:
             "model_src": "",
         }
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
@@ -1043,8 +1044,8 @@ class TestKernelInit:
             "model_src": "",
         }
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions, \
-             patch("kaggle_switch.cli._active_username", return_value=None):
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions, \
+             patch("kaggle_switch.commands.kernel._active_username", return_value=None):
             mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 
@@ -1075,7 +1076,7 @@ class TestKernelInit:
             "model_src": "",
         }
 
-        with patch("kaggle_switch.cli._ask_kernel_init_questions") as mock_questions:
+        with patch("kaggle_switch.commands.kernel._ask_kernel_init_questions") as mock_questions:
             mock_questions.return_value = form_answers
             rc, out = run_cli("kernel", "init", capsys=capsys)
 

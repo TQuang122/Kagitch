@@ -239,7 +239,7 @@ def _step_add_accounts(
     if auth_choice == "oauth":
         con.print(info("Opening browser for OAuth login..."))
         con.print(_sub("Follow the browser prompts to authenticate."))
-        from .cli import _add_via_oauth
+        from .commands.accounts import _add_via_oauth
         try:
             result = _add_via_oauth(config, name)
             if result:
@@ -395,7 +395,7 @@ def _step_project_setup(con: Console, config: dict) -> bool:
     con.print(ok(f"Found: {km}"))
 
     # Try to determine active username
-    from .cli import _active_username
+    from .commands.kernel import _active_username
     username = _active_username(config)
     if not username:
         con.print(warn("Could not determine active Kaggle username."))
@@ -418,7 +418,7 @@ def _step_project_setup(con: Console, config: dict) -> bool:
         return False
 
     if Confirm.ask("  Patch kernel-metadata.json?", default=True, console=con):
-        from .cli import _auto_patch_metadata
+        from .commands.kernel import _auto_patch_metadata
         patch = _auto_patch_metadata(km, username)
         if patch:
             con.print(ok("Patched:"))

@@ -135,7 +135,7 @@ function Invoke-Kagitch {
     $previousWrapper = $env:KAGITCH_SHELL_WRAPPER
     $env:KAGITCH_SHELL_WRAPPER = "1"
     try {
-        $output = & "kagitch.exe" @Arguments 2>&1 | Out-String -Stream
+        $output = & "kagitch.exe" @Arguments | Out-String -Stream
     } finally {
         if ($null -eq $previousWrapper) {
             Remove-Item Env:\\KAGITCH_SHELL_WRAPPER -ErrorAction SilentlyContinue
@@ -174,30 +174,28 @@ kagitch() {{
   fi
 
   local known_cmds=" {_KNOWN_CMDS_STR} "
-  local tmp=$(mktemp /tmp/kagitch.XXXXXX)
   local rc
 
-  if [[ "$known_cmds" =~ " $1 " ]]; then
-    KAGITCH_SHELL_WRAPPER=1 command kagitch "$@" > "$tmp" 2>&1
-  else
-    KAGITCH_SHELL_WRAPPER=1 command kagitch switch "$1" > "$tmp" 2>&1
-  fi
-  rc=$?
-
-  if [[ $rc -ne 0 ]]; then
-    cat "$tmp"
-    rm -f "$tmp"
-    return $rc
-  fi
-
-  while IFS= read -r line; do
-    if [[ "$line" == "unset "* ]] || [[ "$line" == "export "* ]]; then
-      eval "$line"
+  # Switch commands: capture stdout (env_lines for eval) via $()
+  # so stderr (card, prompts, errors) passes through to the terminal
+  # without temp-file buffering.
+  if [[ "$1" == "switch" || ! ( "$known_cmds" =~ " $1 " ) ]]; then
+    local env_output
+    if [[ "$1" == "switch" ]]; then
+      env_output=$(KAGITCH_SHELL_WRAPPER=1 command kagitch "$@")
     else
-      echo "$line"
+      env_output=$(KAGITCH_SHELL_WRAPPER=1 command kagitch switch "$1")
     fi
-  done < "$tmp"
-  rm -f "$tmp"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+      return $rc
+    fi
+    if [[ -n "$env_output" ]]; then
+      eval "$env_output"
+    fi
+  else
+    KAGITCH_SHELL_WRAPPER=1 command kagitch "$@"
+  fi
 }}
 """
 
@@ -214,14 +212,20 @@ function kagitch
   end
 
   set -l known_cmds {_KNOWN_CMDS_STR}
-  if contains -- $argv[1] $known_cmds
-    set out (env KAGITCH_SHELL_WRAPPER=1 command kagitch $argv 2>&1)
-    set rc $status
+  # Switch commands: capture stdout (env_lines) via command substitution
+  # so stderr (card, prompts, errors) passes through to the terminal.
+  if test "$argv[1]" = "switch"; or not contains -- $argv[1] $known_cmds
+    if test "$argv[1]" = "switch"
+      set env_lines (env KAGITCH_SHELL_WRAPPER=1 command kagitch $argv)
+      set rc $status
+    else
+      set env_lines (env KAGITCH_SHELL_WRAPPER=1 command kagitch switch $argv[1])
+      set rc $status
+    end
     if test $rc -ne 0
-      echo "$out"
       return $rc
     end
-    echo "$out" | while read -l line
+    for line in $env_lines
       switch "$line"
         case "unset KAGGLE_CONFIG_DIR"
           set -e KAGGLE_CONFIG_DIR
@@ -236,26 +240,7 @@ function kagitch
       end
     end
   else
-    set out (env KAGITCH_SHELL_WRAPPER=1 command kagitch switch $argv[1] 2>&1)
-    set rc $status
-    if test $rc -ne 0
-      echo "$out"
-      return $rc
-    end
-    echo "$out" | while read -l line
-      switch "$line"
-        case "unset KAGGLE_CONFIG_DIR"
-          set -e KAGGLE_CONFIG_DIR
-        case "export KAGGLE_CONFIG_DIR="*
-          set -gx KAGGLE_CONFIG_DIR (string replace -a '"' '' -- (string split -m1 "=" -- "$line")[2])
-        case "unset KAGGLE_API_TOKEN"
-          set -e KAGGLE_API_TOKEN
-        case "export KAGGLE_API_TOKEN="*
-          set -gx KAGGLE_API_TOKEN (string replace -a '"' '' -- (string split -m1 "=" -- "$line")[2])
-        case '*'
-          echo "$line"
-      end
-    end
+    env KAGITCH_SHELL_WRAPPER=1 command kagitch $argv
   end
 end
 """

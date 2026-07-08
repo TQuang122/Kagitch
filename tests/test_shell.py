@@ -48,9 +48,8 @@ class TestShellpath:
     def test_zsh_function_has_env_parsing(self):
         result = sh.shellpath("zsh")
         assert 'KAGITCH_SHELL_WRAPPER=1' in result
-        assert 'while IFS= read -r line' in result
-        assert '== "unset "* ]]' in result
-        assert '== "export "* ]]' in result
+        assert 'env_output=$' in result
+        assert 'eval "$env_output"' in result
 
     def test_fish_function_has_env_parsing(self):
         result = sh.shellpath("fish")

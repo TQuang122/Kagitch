@@ -1,4 +1,4 @@
-<!-- Generated: 2026-06-29 | Updated: 2026-06-29 -->
+<!-- Generated: 2026-06-29 | Updated: 2026-07-08 -->
 
 # kaggle-switch
 
@@ -13,6 +13,8 @@ Kagitch — a CLI tool for managing multiple Kaggle accounts. Switch between acc
 | `CHANGELOG.md` | Version history and release notes |
 | `LICENSE` | MIT license |
 | `uv.lock` | Dependency lock file for reproducible builds |
+| `src/kaggle_switch/cli.py` | Thin CLI dispatch layer (~80 lines) — delegates to `commands/` package |
+| `src/kaggle_switch/commands/` | Command handler modules (accounts, kernel, doctor, setup, switch) |
 
 ## Subdirectories
 | Directory | Purpose |
@@ -25,28 +27,47 @@ Kagitch — a CLI tool for managing multiple Kaggle accounts. Switch between acc
 ## For AI Agents
 
 ### Working In This Directory
-- This is a Python CLI project using `hatchling` as the build backend
-- Entry point: `kagitch = "kaggle_switch.cli:main"`
-- Requires Python 3.8+ and `rich>=13.0` for terminal output
+- Python CLI project using `hatchling` as the build backend
+- Entry point: `kagitch = "kaggle_switch.cli:main"`, requires Python >= 3.8
+- Install: `pip install -e ".[dev]"`, test: `pytest -v`
+- CI: GitHub Actions on ubuntu-latest + macos-latest, Python 3.8-3.13 (see `.github/workflows/ci.yml`)
+
+### Key Architecture
+- **Account isolation** via `KAGGLE_CONFIG_DIR` env var — each account has `~/.kaggle-<name>/`
+- **Switching** works by injecting `export KAGGLE_CONFIG_DIR=...` via shell `eval`
+- **Token storage** uses OS keychain via `keyring` library (not files)
+- **Config** stored at `~/.config/kagitch/accounts.json` (Linux/macOS) or `%APPDATA%/kagitch/accounts.json` (Windows)
+- **OAuth flow**: opens browser for Kaggle auth, stores refresh token in keychain
+- **Legacy auth**: supports importing API keys from `kaggle.json` files
+
+### Common Patterns & Gotchas
+- All terminal output uses `rich` (Console, Table, Panel) — never bare `print()`
+- `kaggle` CLI is invoked via `subprocess.run()`, NOT the `kagglesdk` directly (except for token refresh)
+- `kagglesdk` has a known `TimeDeltaSerializer` bug for whole-second durations — patched in `checker.py`
+- Shell integration is the trickiest part: uses `eval`-line injection for env vars; Windows PowerShell uses `$PROFILE`
+- Account switching sets `KAGGLE_CONFIG_DIR` to `~/.kaggle-<name>/` — this makes `kaggle` CLI use the right credentials
+- Config directory permissions matter: `accounts.json` stores account metadata (names, paths), not secrets
+- The `patch` command modifies `kernel-metadata.json` to update the Kaggle notebook ID for the active account
+- All modules use `from __future__ import annotations` for PEP 604 style hints (Python 3.8+ compat)
+- `checker.py` uses `concurrent.futures.ThreadPoolExecutor` for parallel quota checks across accounts
 
 ### Testing Requirements
-- Run tests with: `pytest tests/`
+- Run tests with: `pytest tests/ -v`
 - Test configuration in `pyproject.toml` under `[tool.pytest.ini_options]`
 - Dev dependencies: `pytest>=7.0`, `pytest-cov`
-
-### Common Patterns
-- CLI commands are defined in `src/kaggle_switch/cli.py`
-- Configuration management in `src/kaggle_switch/config.py`
-- Rich library used for styled terminal output
-- Accounts stored in `~/.config/kagitch/accounts.json`
+- Tests mock: filesystem, subprocess calls, `keyring` backend, kaggle CLI responses
 
 ## Dependencies
 
-### External
-- `rich>=13.0` - Terminal formatting and styled output
-- `kaggle` - Kaggle API integration (required at runtime)
+### Runtime (in pyproject.toml)
+- `rich>=13.0` — Terminal formatting and styled output
+- `keyring>=25.0` — OS keychain credential storage
+- `questionary>=2.0` — Interactive prompts in wizard
+
+### Runtime (manual install required)
+- `kaggle` — Kaggle CLI (invoked via subprocess). NOT in pyproject.toml; user must `pip install kaggle` separately.
 
 ### Build System
-- `hatchling` - Modern Python build backend
+- `hatchling` — Modern Python build backend
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
