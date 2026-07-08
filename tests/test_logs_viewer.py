@@ -1,18 +1,28 @@
 """Tests for logs_viewer module."""
+import io
+import json
 import subprocess
 from unittest.mock import Mock, patch
 
-import pytest
+from rich.console import Console
 
+from kaggle_switch import logs_viewer as lv
 from kaggle_switch.logs_viewer import (
     LogEntry,
     LogFetchResult,
     _classify_line,
     _format_timestamp,
     _infer_fix_hint,
+    _is_progress_bar,
     _parse_plain_logs,
     _parse_stream_events,
+    _poll_follow,
+    _stream_follow,
+    fetch_logs_follow,
+    get_kernel_status,
+    list_kernels,
     render_logs,
+    render_logs_help,
     render_result,
 )
 
@@ -314,4 +324,216 @@ class TestRenderResult:
         assert "Training started" in captured.out
 
 
+class TestKernelStatus:
+    def test_success_parses_status(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='owner/slug has status "KernelWorkerStatus.COMPLETE"',
+                stderr="",
+            )
+            assert get_kernel_status("owner/slug") == "COMPLETE"
+
+    def test_nonzero_returncode(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="bad")
+            assert get_kernel_status("owner/slug") == ""
+
+    def test_unparseable_stdout(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="no status here", stderr="")
+            assert get_kernel_status("owner/slug") == ""
+
+    def test_file_not_found(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run", side_effect=FileNotFoundError):
+            assert get_kernel_status("owner/slug") == ""
+
+    def test_timeout(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="", timeout=30)):
+            assert get_kernel_status("owner/slug") == ""
+
+
+class TestListKernels:
+    def test_success_sorted_newest_first(self):
+        payload = [
+            {"ref": "owner/older", "title": "Older", "lastRunTime": "2024-01-01T00:00:00Z"},
+            {"ref": "owner/newer", "title": "Newer", "lastRunTime": "2024-01-02T00:00:00Z"},
+        ]
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run, \
+             patch("kaggle_switch.logs_viewer.get_kernel_status", side_effect=["RUNNING", "COMPLETE"]):
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+            result = list_kernels("owner")
+
+        assert [k.ref for k in result] == ["owner/newer", "owner/older"]
+        assert result[0].status == "COMPLETE"
+        assert result[1].status == "RUNNING"
+
+    def test_empty_stdout(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="  ", stderr="")
+            assert list_kernels("owner") == []
+
+    def test_non_list_json(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps({"ref": "x"}), stderr="")
+            assert list_kernels("owner") == []
+
+    def test_invalid_json(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="{", stderr="")
+            assert list_kernels("owner") == []
+
+    def test_nonzero_returncode(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="bad")
+            assert list_kernels("owner") == []
+
+    def test_timeout(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="", timeout=30)):
+            assert list_kernels("owner") == []
+
+    def test_file_not_found(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run", side_effect=FileNotFoundError):
+            assert list_kernels("owner") == []
+
+    def test_skips_private_kernel_empty_ref(self):
+        payload = [
+            {"ref": "", "title": "Private", "lastRunTime": "2024-01-01T00:00:00Z"},
+            {"ref": "owner/public", "title": "Public", "lastRunTime": "2024-01-02T00:00:00Z"},
+        ]
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run, \
+             patch("kaggle_switch.logs_viewer.get_kernel_status", return_value="COMPLETE"):
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+            result = list_kernels("owner")
+        assert len(result) == 1
+        assert result[0].ref == "owner/public"
+
+    def test_status_fetch_exception_fallback_empty(self):
+        payload = [{"ref": "owner/public", "title": "Public", "lastRunTime": "2024-01-02T00:00:00Z"}]
+        with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run, \
+             patch("kaggle_switch.logs_viewer.get_kernel_status", side_effect=RuntimeError("boom")):
+            mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+            result = list_kernels("owner")
+        assert len(result) == 1
+        assert result[0].status == ""
+
+
+class TestFollowMode:
+    def test_fetch_logs_follow_uses_stream_api(self):
+        mock_api = Mock()
+        with patch("kaggle_switch.logs_viewer._try_kaggle_api", return_value=mock_api), \
+             patch("kaggle_switch.logs_viewer._stream_follow", return_value=iter([[LogEntry("stdout", 1.0, "a")]])) as mock_stream:
+            it = fetch_logs_follow("owner/kernel")
+            batches = list(it)
+        assert len(batches) == 1
+        mock_stream.assert_called_once_with("owner/kernel", mock_api)
+
+    def test_fetch_logs_follow_falls_back_to_poll(self):
+        with patch("kaggle_switch.logs_viewer._try_kaggle_api", return_value=None), \
+             patch("kaggle_switch.logs_viewer._poll_follow", return_value=iter([[LogEntry("stdout", 1.0, "b")]])) as mock_poll:
+            it = fetch_logs_follow("owner/kernel")
+            batches = list(it)
+        assert len(batches) == 1
+        mock_poll.assert_called_once_with("owner/kernel")
+
+    def test_stream_follow_yields_batches_of_ten_and_remainder(self):
+        mock_api = Mock()
+        events = [
+            {"data": f"line{i}\n", "stream_name": "stdout", "time": str(1000 + i)}
+            for i in range(11)
+        ]
+        mock_api.kernels_logs_stream.return_value = iter(events)
+        batches = list(_stream_follow("owner/kernel", mock_api))
+        assert len(batches) == 2
+        assert len(batches[0]) == 10
+        assert len(batches[1]) == 1
+
+    def test_poll_follow_yields_new_then_stops_on_stale(self):
+        first = subprocess.CompletedProcess(args=[], returncode=0, stdout="line1\nline2\n", stderr="")
+        stale = subprocess.CompletedProcess(args=[], returncode=0, stdout="line1\nline2\n", stderr="")
+        with patch("kaggle_switch.logs_viewer.subprocess.run", side_effect=[first, stale, stale, stale, stale, stale]), \
+             patch("kaggle_switch.logs_viewer.time.sleep"):
+            batches = list(_poll_follow("owner/kernel"))
+        assert len(batches) == 1
+        assert [e.data for e in batches[0]] == ["line1", "line2"]
+
+    def test_poll_follow_breaks_on_nonzero(self):
+        bad = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="bad")
+        with patch("kaggle_switch.logs_viewer.subprocess.run", return_value=bad):
+            assert list(_poll_follow("owner/kernel")) == []
+
+    def test_poll_follow_breaks_on_timeout(self):
+        with patch("kaggle_switch.logs_viewer.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="", timeout=60)):
+            assert list(_poll_follow("owner/kernel")) == []
+
+
+class TestRenderEdges:
+    def test_is_progress_bar_detection(self):
+        assert _is_progress_bar(" 45%|████ | 23/50 [00:45<01:30, 2.14it/s]") is True
+        assert _is_progress_bar("normal line") is False
+
+    def test_render_logs_empty_no_output(self):
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs([], console=console)
+        assert buf.getvalue() == ""
+
+    def test_render_logs_filters_progress_by_default(self):
+        entries = [
+            LogEntry("stdout", 1.0, " 45%|████ | 23/50 [00:45<01:30, 2.14it/s]"),
+            LogEntry("stdout", 2.0, "kept line"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console)
+        out = buf.getvalue()
+        assert "kept line" in out
+        assert "45%|" not in out
+
+    def test_render_logs_show_progress_true(self):
+        entries = [LogEntry("stdout", 1.0, " 45%|████ | 23/50 [00:45<01:30, 2.14it/s]")]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console, show_progress=True)
+        assert "45%|" in buf.getvalue()
+
+    def test_render_logs_truncates_overlong_line_and_negative_relative(self):
+        long_line = "x" * 4100
+        entries = [LogEntry("stdout", 5.0, long_line)]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console, start_time=10.0)
+        out = buf.getvalue()
+        assert "…" in out or "..." in out
+        assert "+    0s" in out or "+  0.0s" in out or "+    0s".strip() in out
+
+    def test_render_result_displays_hint_panel(self):
+        result = LogFetchResult(entries=[LogEntry("stderr", 0, "FloatingPointError: NaN in loss")])
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        hint = render_result(result, console=console)
+        out = buf.getvalue()
+        assert hint is not None
+        assert "Possible fix" in out
+
+    def test_render_logs_help_prints_usage(self):
+        with patch.object(lv.style_console, "print") as mock_print:
+            render_logs_help()
+        assert mock_print.call_count >= 5
+        first_arg = mock_print.call_args_list[0][0][0]
+        assert "Usage" in first_arg
+
+
+class TestTryKaggleApi:
+    def test_try_kaggle_api_failure_returns_none(self):
+        original_import = __import__
+
+        def fail_kaggle_import(name, *args, **kwargs):
+            if name.startswith("kaggle.api.kaggle_api_extended"):
+                raise ImportError("missing kaggle")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fail_kaggle_import):
+            assert lv._try_kaggle_api() is None
 
