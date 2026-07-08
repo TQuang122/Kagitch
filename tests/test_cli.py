@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ import pytest
 
 from kaggle_switch import cli
 from kaggle_switch import config as cfg
+from kaggle_switch.commands import accounts as accounts_cmd
 from kaggle_switch.commands.kernel import _kernel_style
 
 
@@ -57,6 +59,11 @@ class TestList:
         assert rc == 1
         assert "No accounts configured" in out
 
+    def test_list_no_accounts_message(self, temp_env, capsys):
+        rc, out = run_cli("list", capsys=capsys)
+        assert rc == 1
+        assert "No accounts configured" in out
+
     def test_bare_command_shows_dashboard(self, temp_env, capsys, monkeypatch):
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
         config = cfg.load_config()
@@ -100,6 +107,49 @@ class TestCurrent:
         assert rc == 0
         assert "alpha" in out
 
+    def test_current_stale_active_account(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": "alpha"}}
+        cfg.save_config(config)
+
+        with patch("kaggle_switch.commands.accounts.current_active", return_value="99"):
+            rc, out = run_cli("current", capsys=capsys)
+
+        assert rc == 1
+        assert "Account 99 not found in config" in out
+
+    def test_current_shell_wrapper_uses_tty_status(self, temp_env, capsys, monkeypatch):
+        from kaggle_switch.checker import CheckResult
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        monkeypatch.setenv("KAGITCH_SHELL_WRAPPER", "1")
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        result = CheckResult(
+            number="1",
+            name="alpha",
+            config_path=Path("/tmp/fake"),
+            file_ok=True,
+            auth_user="alpha",
+            auth_match=True,
+            quota_ok=True,
+            gpu_remaining="4.00h",
+            tpu_remaining="2.00h",
+        )
+
+        with patch("kaggle_switch.commands.accounts.display._tty_status", return_value=nullcontext()) as mock_status, \
+             patch("kaggle_switch.checker.check_account", return_value=result) as mock_check:
+            rc, out = run_cli("current", capsys=capsys)
+
+        assert rc == 0
+        assert "alpha" in out
+        assert "4.00h" in out
+        assert "2.00h" in out
+        mock_status.assert_called_once()
+        mock_check.assert_called_once()
+
 
 class TestLogin:
     def test_login_missing_name(self, temp_env, capsys):
@@ -114,6 +164,38 @@ class TestLogin:
         rc, out = run_cli("login", "existing", capsys=capsys)
         assert rc == 1
         assert "already exists" in out
+
+    def test_add_via_oauth_duplicate_name(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "existing", "config_dir": "existing"}}
+        cfg.save_config(config)
+
+        rc = accounts_cmd._add_via_oauth(config, "existing")
+        captured = capsys.readouterr()
+        out = _ANSI_RE.sub("", captured.out + captured.err)
+
+        assert rc == 1
+        assert "Account 'existing' already exists as #1" in out
+
+    def test_add_via_oauth_import_error(self, temp_env, capsys):
+        config = cfg.load_config()
+
+        original_import = __import__
+
+        def fail_kagglesdk_import(name, *args, **kwargs):
+            if name.startswith("kagglesdk"):
+                raise ImportError("no sdk")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fail_kagglesdk_import):
+            rc = accounts_cmd._add_via_oauth(config, "oauthuser")
+
+        captured = capsys.readouterr()
+        out = _ANSI_RE.sub("", captured.out + captured.err)
+
+        assert rc == 1
+        assert "kagglesdk is required for OAuth login" in out
+        assert "pip install kagglesdk" in out
 
     def test_login_oauth_success(self, temp_env, capsys, monkeypatch):
         pytest.importorskip("kagglesdk")
@@ -319,6 +401,21 @@ class TestAdd:
 
 
 class TestRemove:
+    def test_remove_usage_without_arg(self, temp_env, capsys):
+        rc, out = run_cli("remove", capsys=capsys)
+        assert rc == 1
+        assert "Usage: kagitch remove <N|name>" in out
+
+    def test_remove_not_found(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        rc, out = run_cli("remove", "missing", capsys=capsys)
+
+        assert rc == 1
+        assert "Account 'missing' not found" in out
+
     def test_remove_cancelled(self, temp_env, capsys, monkeypatch):
         import io
         config = cfg.load_config()
@@ -331,6 +428,19 @@ class TestRemove:
         config = cfg.load_config()
         assert "1" in config["accounts"]
 
+    def test_remove_confirmed(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        with patch("kaggle_switch.commands.accounts.Confirm.ask", return_value=True):
+            rc, out = run_cli("remove", "1", capsys=capsys)
+
+        assert rc == 0
+        assert "Removed account #1" in out
+        config = cfg.load_config()
+        assert "1" not in config["accounts"]
+
 
 class TestRename:
     def test_rename_success(self, temp_env, capsys):
@@ -342,6 +452,21 @@ class TestRename:
         assert "newname" in out
         config = cfg.load_config()
         assert config["accounts"]["1"]["name"] == "newname"
+
+    def test_rename_usage_without_args(self, temp_env, capsys):
+        rc, out = run_cli("rename", "1", capsys=capsys)
+        assert rc == 1
+        assert "Usage: kagitch rename <N> <new_name>" in out
+
+    def test_rename_not_found(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        rc, out = run_cli("rename", "99", "newname", capsys=capsys)
+
+        assert rc == 1
+        assert "Account #99 not found" in out
 
 
 class TestAliases:
