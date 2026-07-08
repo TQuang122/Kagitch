@@ -277,6 +277,16 @@ class TestFetchLogsSubprocess:
                 result = fetch_logs("user/kernel")
                 assert "not found" in result.error
 
+    def test_nonzero_returncode_without_output_uses_exit_code(self):
+        with patch("kaggle_switch.logs_viewer._try_kaggle_api", return_value=None):
+            with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
+                mock_run.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=7, stdout="", stderr="",
+                )
+                from kaggle_switch.logs_viewer import fetch_logs
+                result = fetch_logs("user/kernel")
+                assert result.error == "kaggle exited with code 7"
+
     def test_success(self):
         with patch("kaggle_switch.logs_viewer._try_kaggle_api", return_value=None):
             with patch("kaggle_switch.logs_viewer.subprocess.run") as mock_run:
@@ -473,6 +483,9 @@ class TestRenderEdges:
         assert _is_progress_bar(" 45%|████ | 23/50 [00:45<01:30, 2.14it/s]") is True
         assert _is_progress_bar("normal line") is False
 
+    def test_is_progress_bar_download_detection(self):
+        assert _is_progress_bar("ÿÿÿ 44.8/44.8 kB eta 0:00:00") is True
+
     def test_render_logs_empty_no_output(self):
         buf = io.StringIO()
         console = Console(file=buf, force_terminal=False)
@@ -537,3 +550,22 @@ class TestTryKaggleApi:
         with patch("builtins.__import__", side_effect=fail_kaggle_import):
             assert lv._try_kaggle_api() is None
 
+    def test_try_kaggle_api_success(self):
+        original_import = __import__
+        fake_api = Mock()
+
+        class FakeKaggleApi:
+            def __call__(self):
+                return fake_api
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "kaggle.api.kaggle_api_extended":
+                module = Mock()
+                module.KaggleApi = FakeKaggleApi()
+                return module
+            return original_import(name, globals, locals, fromlist, level)
+
+        with patch("builtins.__import__", side_effect=fake_import):
+            result = lv._try_kaggle_api()
+        assert result is fake_api
+        fake_api.authenticate.assert_called_once_with()

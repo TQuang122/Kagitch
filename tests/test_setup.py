@@ -157,6 +157,12 @@ class TestCmdInitShellWrapper:
         mock_wiz.assert_called_once()
         assert mock_wiz.call_args.kwargs["con"] is not None
 
+        flush_wrapper = mock_wiz.call_args.kwargs["con"].file
+        flush_wrapper.write("hello")
+        flush_wrapper.flush()
+        mock_tty.write.assert_called_with("hello")
+        assert mock_tty.flush.call_count >= 2
+
     def test_tty_oserror_fallback(self):
         """When /dev/tty open fails, fall through to normal wizard."""
         with patch.dict("os.environ", {"KAGITCH_SHELL_WRAPPER": "1"}), \

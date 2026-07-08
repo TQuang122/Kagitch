@@ -345,7 +345,8 @@ class TestSwitch:
         oauth_dir.mkdir(parents=True, exist_ok=True)
         (oauth_dir / "credentials.json").write_text('{"refresh_token": "rt1"}')
 
-        rc, out = run_cli("2", capsys=capsys)
+        with patch("kaggle_switch.commands.switch._refresh_oauth_token", return_value=None):
+            rc, out = run_cli("2", capsys=capsys)
         assert rc == 0
 
         dest = tmp_path / ".kaggle" / "credentials.json"
@@ -1562,6 +1563,7 @@ class TestMainBlock:
         import runpy
 
         monkeypatch.setattr(sys, "argv", ["kagitch", "--help"])
+        monkeypatch.delitem(sys.modules, "kaggle_switch.cli", raising=False)
         with pytest.raises(SystemExit) as exc:
             runpy.run_module("kaggle_switch.cli", run_name="__main__")
         assert exc.value.code == 0

@@ -535,6 +535,25 @@ class TestCheckerModuleImport:
     def test_hassdk_defined(self):
         assert hasattr(checker, "_HAS_SDK")
 
+    def test_import_without_sdk_sets_has_sdk_false(self):
+        original_import = __import__
+
+        def fail_kagglesdk_import(name, *args, **kwargs):
+            if name.startswith("kagglesdk"):
+                raise ImportError("missing sdk")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fail_kagglesdk_import):
+            import importlib
+
+            mod = importlib.reload(checker)
+
+        assert mod._HAS_SDK is False
+
+        import importlib
+
+        importlib.reload(checker)
+
 
 class TestRefreshOAuthToken:
     def test_no_creds_file(self, tmp_path):

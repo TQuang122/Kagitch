@@ -69,6 +69,13 @@ class TestScanFilesystemDirs:
         monkeypatch.setattr("pathlib.Path.home", lambda: home)
         assert iw._scan_filesystem_dirs() == []
 
+    def test_skips_non_directory_entries(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / ".kaggle-file").write_text("not a dir")
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        assert iw._scan_filesystem_dirs() == []
+
 
 class TestDetectKernelMetadata:
     """_detect_kernel_metadata() helper."""
@@ -308,6 +315,20 @@ class TestStepAddAccounts:
             result = iw._step_add_accounts(capcon, config)
 
         assert result is False
+
+    def test_legacy_add_account_success(self, capcon, tmp_path):
+        config = {"accounts": {}}
+        legacy = tmp_path / "kaggle.json"
+        legacy.write_text("{}")
+        prompts = iter(["new", "legacy", str(legacy)])
+
+        with patch.object(iw.Confirm, "ask", return_value=True), \
+             patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.config.add_account") as mock_add:
+            result = iw._step_add_accounts(capcon, config)
+
+        assert result is True
+        mock_add.assert_called_once_with(config, "new", str(legacy.resolve()), auth_type="legacy")
 
 
 class TestShellIntegration:

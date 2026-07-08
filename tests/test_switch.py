@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from kaggle_switch.commands.switch import (
     _active_username_from_account,
     _apply_account_env,
@@ -139,7 +137,8 @@ class TestApplyAccountEnv:
         oauth_dir.mkdir(parents=True)
         (oauth_dir / "credentials.json").write_text('{"refresh_token": "rt1"}')
 
-        with patch("kaggle_switch.commands.switch.get_token", return_value=""):
+        with patch("kaggle_switch.commands.switch.get_token", return_value=""), \
+             patch("kaggle_switch.commands.switch._refresh_oauth_token", return_value=None):
             _apply_account_env(acc)
 
         dest = tmp_path / ".kaggle" / "credentials.json"
@@ -250,9 +249,6 @@ class TestCmdSwitch:
         acc_dir = tmp_path / ".kaggle-testacc"
         acc_dir.mkdir(parents=True)
         (acc_dir / "credentials.json").write_text('{"username": "testuser"}')
-
-        # Mock the _auto_patch_metadata to return a patch line
-        from unittest.mock import ANY
 
         with patch(
             "kaggle_switch.commands.kernel._auto_patch_metadata", return_value="  [dim]patched[/]"
