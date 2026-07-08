@@ -43,3 +43,8 @@ packages = ["src/kaggle_switch"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = [
+    "--cov=kaggle_switch",
+    "--cov-report=term-missing",
+    "--cov-fail-under=95",
+]
