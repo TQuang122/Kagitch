@@ -9,7 +9,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import Account, KAGGLE_DEFAULT, get_accounts, load_config
@@ -259,7 +259,7 @@ def _check_quota_sdk(
                                 if new_refresh:
                                     data["refresh_token"] = new_refresh
                                 data["access_token_expiration"] = (
-                                    datetime.now(datetime.UTC)
+                                    datetime.now(timezone.utc)
                                     + timedelta(seconds=expires_in - 60)
                                 ).isoformat()
                                 creds_file.write_text(

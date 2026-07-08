@@ -69,3 +69,13 @@ class TestDeleteToken:
     def test_delete_returns_false_when_keyring_unavailable(self):
         keychain.KEYRING_AVAILABLE = False
         assert keychain.delete_token("work") is False
+
+
+class TestKeyringUnavailable:
+    def test_fallback_on_import_error(self):
+        """Lines 10-11: KEYRING_AVAILABLE=False when keyring import fails."""
+        import importlib
+        with patch.dict("sys.modules", {"keyring": None}):
+            importlib.reload(keychain)
+            assert keychain.KEYRING_AVAILABLE is False
+        importlib.reload(keychain)

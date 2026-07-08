@@ -218,3 +218,80 @@ class TestAuthType:
         acc = cfg.get_accounts(config)[0]
         assert acc.auth_type == ""
 
+
+class TestConfigDir:
+    def test_posix_path(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        result = cfg._config_dir()
+        assert ".config/kagitch" in str(result)
+
+    def test_windows_path(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+        result = cfg._config_dir()
+        assert "AppData/Roaming/kagitch" in str(result) or "AppData\\Roaming\\kagitch" in str(result)
+
+
+class TestMigratePlaintextTokens:
+    def test_migrate_moves_tokens_to_keychain(self, temp_config, monkeypatch):
+        monkeypatch.setattr(cfg, "CONFIG_FILE", temp_config / "config" / "accounts.json")
+        from kaggle_switch import keychain as kc
+        monkeypatch.setattr(kc, "KEYRING_AVAILABLE", True)
+        config = {"accounts": {"1": {"name": "alice", "api_token": "KGAT_secret1"}, "2": {"name": "bob", "api_token": "KGAT_secret2"}}}
+        with patch("kaggle_switch.keychain.keyring") as mock_kring:
+            cfg._migrate_plaintext_tokens(config)
+        assert "api_token" not in config["accounts"]["1"]
+        assert "api_token" not in config["accounts"]["2"]
+        mock_kring.set_password.assert_any_call("kagitch", "alice", "KGAT_secret1")
+        mock_kring.set_password.assert_any_call("kagitch", "bob", "KGAT_secret2")
+
+    def test_migrate_skips_when_no_tokens(self, temp_config):
+        config = {"accounts": {"1": {"name": "alice", "config_dir": "alice"}}}
+        cfg._migrate_plaintext_tokens(config)
+        assert "api_token" not in config["accounts"]["1"]
+
+
+class TestGetToken:
+    def test_returns_keychain_token(self, temp_config, monkeypatch):
+        from kaggle_switch import keychain as kc
+        monkeypatch.setattr(kc, "KEYRING_AVAILABLE", True)
+        acc = cfg.Account(number="1", name="alice", config_dir="alice")
+        with patch("kaggle_switch.keychain.keyring") as mock_kring:
+            mock_kring.get_password.return_value = "KGAT_from_keychain"
+            result = cfg.get_token(acc)
+        assert result == "KGAT_from_keychain"
+
+    def test_falls_back_to_account_field(self, temp_config, monkeypatch):
+        from kaggle_switch import keychain as kc
+        monkeypatch.setattr(kc, "KEYRING_AVAILABLE", True)
+        acc = cfg.Account(number="1", name="alice", config_dir="alice", api_token="KGAT_fallback")
+        with patch("kaggle_switch.keychain.keyring") as mock_kring:
+            mock_kring.get_password.return_value = None
+            result = cfg.get_token(acc)
+        assert result == "KGAT_fallback"
+
+
+class TestAddAccountEdgeCases:
+    def test_add_with_renamed_file(self, temp_config, tmp_path, monkeypatch):
+        """Config line 192: src.name not kaggle.json or access_token -> rename message."""
+        some_file = tmp_path / "mycreds.txt"
+        some_file.write_text('{"username":"test","key":"abc123"}')
+        config = {"accounts": {}}
+        with patch("sys.stderr") as mock_stderr:
+            acc = cfg.add_account(config, "renameuser", some_file)
+        assert acc.number == "1"
+        target = temp_config / ".kaggle-renameuser" / "kaggle.json"
+        assert target.exists()
+
+
+class TestRemoveAccountEdgeCases:
+    def test_remove_deletes_account_dir(self, temp_config):
+        """Config line 214: shutil.rmtree called when account dir exists."""
+        acc_dir = temp_config / ".kaggle-removeme"
+        acc_dir.mkdir(parents=True)
+        (acc_dir / "kaggle.json").write_text("{}")
+        config = {"accounts": {"1": {"name": "removeme", "config_dir": "removeme"}}}
+        acc = cfg.remove_account(config, "1")
+        assert not acc_dir.exists()
+        assert "1" not in config["accounts"]
+

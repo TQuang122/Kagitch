@@ -1,5 +1,6 @@
 """Tests for CLI module."""
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -19,10 +20,24 @@ def temp_env(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "CONFIG_FILE", tmp_path / ".config" / "kagitch" / "accounts.json")
     monkeypatch.setattr(cfg, "KAGGLE_DEFAULT", tmp_path / ".kaggle")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    # Create a fake kaggle.json for add tests
     kaggle_json = tmp_path / "kaggle.json"
     kaggle_json.write_text('{"username":"test","key":"abc123"}')
-    return tmp_path, kaggle_json
+
+    # _apply_account_env() directly mutates os.environ, bypassing
+    # monkeypatch — save and restore these env vars explicitly.
+    saved_kcd = os.environ.get("KAGGLE_CONFIG_DIR")
+    saved_kat = os.environ.get("KAGGLE_API_TOKEN")
+
+    yield tmp_path, kaggle_json
+
+    if saved_kcd is None:
+        os.environ.pop("KAGGLE_CONFIG_DIR", None)
+    else:
+        os.environ["KAGGLE_CONFIG_DIR"] = saved_kcd
+    if saved_kat is None:
+        os.environ.pop("KAGGLE_API_TOKEN", None)
+    else:
+        os.environ["KAGGLE_API_TOKEN"] = saved_kat
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
@@ -452,6 +467,66 @@ class TestCheck:
         rc, out = run_cli("check", capsys=capsys)
         assert rc == 0
 
+    def test_check_machine_mode(self, temp_env, capsys, monkeypatch):
+        """check uses _tty_status when KAGITCH_SHELL_WRAPPER=1."""
+        monkeypatch.setenv("KAGITCH_SHELL_WRAPPER", "1")
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        from kaggle_switch.checker import CheckResult
+        r1 = CheckResult(number="1", name="alpha", config_path=Path("/tmp/fake"))
+        r1.file_ok = True
+        r1.auth_match = True
+
+        with patch("kaggle_switch.checker.check_all_accounts", return_value=[r1]):
+            rc, out = run_cli("check", capsys=capsys)
+
+        assert rc == 0
+
+    def test_check_quota_errors(self, temp_env, capsys, monkeypatch):
+        """check shows quota errors in table and summary."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        from kaggle_switch.checker import CheckResult
+        r1 = CheckResult(number="1", name="alpha", config_path=Path("/tmp/fake"))
+        r1.file_ok = True
+        r1.auth_match = True
+        r1.quota_ok = False
+        r1.quota_error = "API rate limit"
+
+        with patch("kaggle_switch.checker.check_all_accounts", return_value=[r1]):
+            rc, out = run_cli("check", capsys=capsys)
+
+        assert rc == 0
+        assert "err" in out
+
+    def test_check_legacy_count(self, temp_env, capsys, monkeypatch):
+        """check shows legacy key warning in summary."""
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        from kaggle_switch.checker import CheckResult
+        r1 = CheckResult(number="1", name="alpha", config_path=Path("/tmp/fake"))
+        r1.file_ok = True
+        r1.auth_match = True
+        r1.auth_method = "LEGACY_API_KEY"
+        r1.quota_ok = True
+        r1.gpu_remaining = "4.00h"
+        r1.tpu_remaining = "0h"
+
+        with patch("kaggle_switch.checker.check_all_accounts", return_value=[r1]):
+            rc, out = run_cli("check", capsys=capsys)
+
+        assert rc == 0
+        assert "Legacy Key" in out
+
 
 class TestListAccounts:
     def test_list_accounts_output(self, temp_env, capsys):
@@ -573,6 +648,241 @@ class TestDoctor:
         rc, out = run_cli("doctor", capsys=capsys)
         assert rc == 1
         assert "kagitch init" in out
+
+    def test_doctor_active_account_creds(self, temp_env, capsys, monkeypatch):
+        """doctor shows active account, OAuth creds path, indicator, active tag."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+        (kaggle_dir / "credentials.json").write_text("{}")
+
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 0
+        assert "OAuth creds" in out
+        assert "#1 alpha" in out
+        assert "\u25ba" in out  # active indicator
+        assert "OAuth" in out
+        assert "active" in out
+
+    def test_doctor_quota_ok_tty(self, temp_env, capsys, monkeypatch):
+        """doctor shows quota OK lines via console.status (TTY mode)."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        from kaggle_switch.checker import CheckResult
+        cr = CheckResult(number="1", name="alpha", config_path=kaggle_dir)
+        cr.quota_ok = True
+        cr.gpu_remaining = "4.13h"
+        cr.tpu_remaining = "20.00h"
+
+        with patch("kaggle_switch.checker.check_account", return_value=cr):
+            rc, out = run_cli("doctor", capsys=capsys)
+
+        assert rc == 0
+        assert "GPU" in out
+        assert "TPU" in out
+        assert "4.13h" in out
+        assert "20.00h" in out
+
+    def test_doctor_quota_machine_mode(self, temp_env, capsys, monkeypatch):
+        """doctor uses _tty_status when KAGITCH_SHELL_WRAPPER=1."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+        monkeypatch.setenv("KAGITCH_SHELL_WRAPPER", "1")
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        from kaggle_switch.checker import CheckResult
+        cr = CheckResult(number="1", name="alpha", config_path=kaggle_dir)
+        cr.quota_ok = True
+        cr.gpu_remaining = "2.00h"
+
+        with patch("kaggle_switch.checker.check_account", return_value=cr):
+            rc, out = run_cli("doctor", capsys=capsys)
+
+        assert rc == 0
+        assert "GPU" in out
+        assert "2.00h" in out
+
+    def test_doctor_quota_error(self, temp_env, capsys, monkeypatch):
+        """doctor shows quota error when check_account returns error."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        from kaggle_switch.checker import CheckResult
+        cr = CheckResult(number="1", name="alpha", config_path=kaggle_dir)
+        cr.quota_ok = False
+        cr.quota_error = "403 Forbidden"
+
+        with patch("kaggle_switch.checker.check_account", return_value=cr):
+            rc, out = run_cli("doctor", capsys=capsys)
+
+        assert rc == 0
+        assert "403 Forbidden" in out
+
+    def test_doctor_quota_na(self, temp_env, capsys, monkeypatch):
+        """doctor shows n/a when quota not OK and no error."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        from kaggle_switch.checker import CheckResult
+        cr = CheckResult(number="1", name="alpha", config_path=kaggle_dir)
+        cr.quota_ok = False
+
+        with patch("kaggle_switch.checker.check_account", return_value=cr):
+            rc, out = run_cli("doctor", capsys=capsys)
+
+        assert rc == 0
+        assert "n/a" in out
+
+    def test_doctor_legacy_badge(self, temp_env, capsys, monkeypatch):
+        """doctor shows Legacy Key badge for accounts with kaggle.json."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": "alpha"}}
+        cfg.save_config(config)
+        acc_path = tmp_path / ".kaggle-alpha"
+        acc_path.mkdir(parents=True, exist_ok=True)
+        (acc_path / "kaggle.json").write_text('{"username":"test","key":"abc123"}')
+
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 0
+        assert "Legacy Key" in out
+
+    def test_doctor_unknown_auth(self, temp_env, capsys, monkeypatch):
+        """doctor shows ? for token auth method."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": "alpha"}}
+        cfg.save_config(config)
+        acc_path = tmp_path / ".kaggle-alpha"
+        acc_path.mkdir(parents=True, exist_ok=True)
+        (acc_path / "access_token").write_text("some-token")
+
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 0
+        assert "? Token" in out
+
+    def test_doctor_powershell_reload(self, temp_env, capsys, monkeypatch):
+        """doctor shows . $PROFILE reload hint for powershell."""
+        tmp_path, _ = temp_env
+        ps_profile = tmp_path / "Microsoft.PowerShell_profile.ps1"
+        ps_profile.write_text('kagitch shellpath powershell\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "powershell")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: ps_profile)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 0
+        assert "source" not in out
+        assert "kagitch init -r" in out
+
+    def test_doctor_config_dir_unreadable(self, temp_env, capsys, monkeypatch):
+        """doctor flags config dir when it exists but is not readable."""
+        tmp_path, _ = temp_env
+        config_dir = tmp_path / ".kaggle"
+        config_dir.mkdir(exist_ok=True)
+        original_access = os.access
+        monkeypatch.setattr(
+            os, "access",
+            lambda path, mode, **kw: False if path == config_dir else original_access(path, mode, **kw),
+        )
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 1
+        assert "not readable" in out
+
+    def test_doctor_creds_unreadable(self, temp_env, capsys, monkeypatch):
+        """doctor flags OAuth creds when file exists but is not readable."""
+        tmp_path, _ = temp_env
+        config_dir = tmp_path / ".kaggle"
+        config_dir.mkdir(exist_ok=True)
+        creds_file = config_dir / "credentials.json"
+        creds_file.write_text("{}")
+        original_access = os.access
+        monkeypatch.setattr(
+            os, "access",
+            lambda path, mode, **kw: False if str(path) == str(creds_file) else original_access(path, mode, **kw),
+        )
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert "readable" in out
+
+    def test_doctor_kaggle_no_active(self, temp_env, capsys, monkeypatch):
+        """doctor shows 'no active account' when kaggle installed but no account active."""
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert "no active account" in out
 
 
 class TestCurrentQuota:
@@ -1082,3 +1392,51 @@ class TestKernelInit:
 
         assert rc == 1
         assert "required" in out.lower()
+
+
+class TestCliCoverage:
+    """Cover remaining cli.py dispatch lines: cmd_init, cmd_update, kernel logs, main exception."""
+
+    def test_init_dispatch(self, temp_env, capsys):
+        """Line 89: kagitch init calls cmd_init (no args = wizard)."""
+        with patch("kaggle_switch.cli.cmd_init", return_value=0):
+            rc, out = run_cli("init", capsys=capsys)
+        assert rc == 0
+
+    def test_init_reload(self, temp_env, capsys):
+        """Line 89: kagitch init -r calls cmd_init(['-r'])."""
+        with patch("kaggle_switch.cli.cmd_init", return_value=0):
+            rc, out = run_cli("init", "-r", capsys=capsys)
+        assert rc == 0
+
+    def test_update_dispatch(self, temp_env, capsys, monkeypatch):
+        """Line 95: kagitch update calls cmd_update()."""
+        with patch("kaggle_switch.cli.cmd_update", return_value=0):
+            rc, out = run_cli("update", capsys=capsys)
+        assert rc == 0
+
+    def test_kernel_logs_dispatch(self, temp_env, capsys, monkeypatch):
+        """Line 107: kagitch kernel logs <name> calls cmd_kernel_logs."""
+        with patch("kaggle_switch.cli.cmd_kernel_logs", return_value=0):
+            rc, out = run_cli("kernel", "logs", "mykernel", capsys=capsys)
+        assert rc == 0
+
+    def test_main_exception_handler(self, temp_env, capsys):
+        """Lines 37-40: main() catches _main() exceptions and returns 1."""
+        with patch("kaggle_switch.cli._main", side_effect=ValueError("boom")):
+            rc, out = run_cli(capsys=capsys)
+        assert rc == 1
+        assert "Traceback" in out
+
+
+class TestMainBlock:
+    """Tests for __name__ == '__main__' guard (line 130)."""
+
+    def test_main_block_executes(self, monkeypatch):
+        """Line 130: sys.exit(main()) runs when __name__ == '__main__'."""
+        import runpy
+
+        monkeypatch.setattr(sys, "argv", ["kagitch", "--help"])
+        with pytest.raises(SystemExit) as exc:
+            runpy.run_module("kaggle_switch.cli", run_name="__main__")
+        assert exc.value.code == 0

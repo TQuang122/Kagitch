@@ -1,4 +1,6 @@
 """Tests for shell module."""
+from pathlib import Path
+
 import pytest
 
 from kaggle_switch import shell as sh
@@ -206,3 +208,50 @@ class TestCompletions:
     def test_completions_zsh_has_list_accounts_call(self):
         result = sh.completions("zsh")
         assert "__list_accounts" in result
+
+
+class TestKnownCmdsMarker:
+    def test_returns_known_commands_str(self):
+        result = sh.known_cmds_marker()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+
+class TestDetectShellEdgeCases:
+    def test_windows_default(self, monkeypatch):
+        monkeypatch.delenv("SHELL", raising=False)
+        monkeypatch.setattr("sys.platform", "win32")
+        assert sh.detect_shell() == "powershell"
+
+
+class TestRcFileEdgeCases:
+    def test_powershell_windows(self, monkeypatch):
+        monkeypatch.setattr("sys.platform", "win32")
+        home = Path.home()
+        ps7 = home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
+        ps51 = home / "Documents" / "WindowsPowerShell" / "Microsoft.PowerShell_profile.ps1"
+        # When neither ps7 nor ps51 exist, should default to ps7
+        rc = sh.rc_file_for_shell("powershell")
+        assert rc is not None
+        assert "PowerShell" in str(rc)
+
+    def test_powershell_windows_ps7_exists(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        ps7 = tmp_path / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
+        ps7.parent.mkdir(parents=True)
+        ps7.write_text("")
+        ps51 = tmp_path / "Documents" / "WindowsPowerShell" / "Microsoft.PowerShell_profile.ps1"
+        ps51.parent.mkdir(parents=True)
+        ps51.write_text("")
+        rc = sh.rc_file_for_shell("powershell")
+        assert rc == ps7
+
+    def test_powershell_windows_ps51_fallback(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        ps51 = tmp_path / "Documents" / "WindowsPowerShell" / "Microsoft.PowerShell_profile.ps1"
+        ps51.parent.mkdir(parents=True)
+        ps51.write_text("")
+        rc = sh.rc_file_for_shell("powershell")
+        assert rc == ps51

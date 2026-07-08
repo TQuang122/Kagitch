@@ -11,7 +11,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -264,6 +264,18 @@ class TestTtyStatus:
             with display._tty_status("test"):
                 raise CustomError("intentional")
 
+    def test_success_path_opens_and_closes_tty(self):
+        """When /dev/tty opens, close it and yield control."""
+        mock_file = MagicMock()
+        mock_console = MagicMock()
+        with patch("builtins.open", return_value=mock_file):
+            with patch("kaggle_switch.display.Console", return_value=mock_console):
+                called = False
+                with display._tty_status("working..."):
+                    called = True
+                assert called is True
+        mock_file.close.assert_called_once()
+
 
 # ── _terminal_select (edge cases) ───────────────────────────────
 
@@ -330,6 +342,200 @@ class TestTerminalSelectEdgeCases:
             assert result == 0
 
 
+# ── _terminal_select (interactive flow) ─────────────────────────
+
+
+class TestTerminalSelectInteractive:
+
+    # ── helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _setup_stdin(monkeypatch, key_sequence):
+        import termios
+        import tty
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdin, "fileno", lambda: 999)
+
+        old_attrs = b"old"
+        monkeypatch.setattr(termios, "tcgetattr", lambda fd: old_attrs)
+        monkeypatch.setattr(
+            termios, "tcsetattr", lambda fd, act, attrs: None
+        )
+        monkeypatch.setattr(tty, "setraw", lambda fd: None)
+
+        it = iter(key_sequence)
+        monkeypatch.setattr(sys.stdin, "read", lambda n: next(it))
+        return it
+
+    # ── positive selection ───────────────────────────────────────
+
+    def test_enter_selects_default(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\r"])
+        assert display._terminal_select(["A", "B", "C"], 0) == 0
+
+    def test_enter_newline_selects_default(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\n"])
+        assert display._terminal_select(["A", "B", "C"], 1) == 1
+
+    def test_arrow_down_selects_next(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x1b", "[B", "\r"])
+        assert display._terminal_select(["A", "B", "C"]) == 1
+
+    def test_arrow_down_repeated(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x1b", "[B", "\x1b", "[B", "\r"])
+        assert display._terminal_select(["A", "B", "C"]) == 2
+
+    def test_arrow_up_selects_previous(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x1b", "[A", "\x1b", "[A", "\r"])
+        assert display._terminal_select(["A", "B", "C"], 2) == 0
+
+    def test_arrow_up_wraps_to_last(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x1b", "[A", "\r"])
+        assert display._terminal_select(["A", "B", "C"], 0) == 2
+
+    def test_arrow_down_wraps_to_first(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x1b", "[B", "\r"])
+        assert display._terminal_select(["A", "B", "C"], 2) == 0
+
+    def test_mixed_arrows(self, monkeypatch):
+        self._setup_stdin(
+            monkeypatch, ["\x1b", "[B", "\x1b", "[B", "\x1b", "[A", "\r"]
+        )
+        assert display._terminal_select(["A", "B", "C"], 0) == 1
+
+    # ── cancellation ─────────────────────────────────────────────
+
+    def test_q_cancels(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["q"])
+        assert display._terminal_select(["A", "B"]) is None
+
+    def test_ctrl_c_returns_none(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x03"])
+        assert display._terminal_select(["A", "B"]) is None
+
+    def test_eof_error_returns_none(self, monkeypatch):
+        import termios
+        import tty
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stdin, "fileno", lambda: 999)
+        monkeypatch.setattr(termios, "tcgetattr", lambda fd: b"old")
+        monkeypatch.setattr(termios, "tcsetattr", lambda fd, a, a2: None)
+        monkeypatch.setattr(tty, "setraw", lambda fd: None)
+        monkeypatch.setattr(
+            sys.stdin,
+            "read",
+            lambda n: (_ for _ in ()).throw(EOFError()),
+        )
+        assert display._terminal_select(["A", "B"]) is None
+
+    # ── ignored input ────────────────────────────────────────────
+
+    def test_non_special_chars_ignored(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["x", " ", "\r"])
+        assert display._terminal_select(["A", "B", "C"]) == 0
+
+    def test_unknown_escape_ignored(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x1b", "[C", "\r"])
+        assert display._terminal_select(["A", "B", "C"]) == 0
+
+    def test_escape_without_full_sequence_ignored(self, monkeypatch):
+        self._setup_stdin(monkeypatch, ["\x1b", "\r", "\r"])
+        # read(2) consumes '\r' and continues since rest != '[A' or '[B';
+        # second '\r' breaks the loop
+        assert display._terminal_select(["A", "B", "C"]) == 0
+
+    # ── /dev/tty path ────────────────────────────────────────────
+
+    def test_dev_tty_used_when_stderr_not_tty(self, monkeypatch):
+        import termios
+        import tty
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stdin, "fileno", lambda: 999)
+        monkeypatch.setattr(termios, "tcgetattr", lambda fd: b"old")
+        monkeypatch.setattr(termios, "tcsetattr", lambda fd, a, a2: None)
+        monkeypatch.setattr(tty, "setraw", lambda fd: None)
+
+        it = iter(["\r"])
+        monkeypatch.setattr(sys.stdin, "read", lambda n: next(it))
+
+        mock_file = MagicMock()
+        with patch("builtins.open", return_value=mock_file) as mock_open:
+            result = display._terminal_select(["A", "B"])
+
+        assert result == 0
+        mock_open.assert_called_once_with("/dev/tty", "w")
+        mock_file.close.assert_called_once()
+
+    def test_dev_tty_oserror_falls_back_to_stderr(self, monkeypatch):
+        import termios
+        import tty
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stdin, "fileno", lambda: 999)
+        monkeypatch.setattr(termios, "tcgetattr", lambda fd: b"old")
+        monkeypatch.setattr(termios, "tcsetattr", lambda fd, a, a2: None)
+        monkeypatch.setattr(tty, "setraw", lambda fd: None)
+
+        it = iter(["\r"])
+        monkeypatch.setattr(sys.stdin, "read", lambda n: next(it))
+
+        with patch("builtins.open", side_effect=OSError("no tty")):
+            result = display._terminal_select(["A", "B"])
+
+        assert result == 0
+
+    def test_dev_tty_fallback_when_no_termios(self, monkeypatch):
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+
+        mock_file = MagicMock()
+        with patch("builtins.open", return_value=mock_file):
+            with patch.dict(
+                "sys.modules", {"termios": None, "tty": None}, clear=False
+            ):
+                result = display._terminal_select(["A", "B", "C"], 2)
+
+        assert result == 2
+        mock_file.close.assert_called_once()
+
+    def test_stdin_not_tty_after_termios_import(self, monkeypatch):
+        import termios
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+        result = display._terminal_select(["A", "B", "C"], 1)
+        assert result == 1
+
+    def test_stdin_not_tty_with_dev_tty_opened(self, monkeypatch):
+        """stdin not TTY but /dev/tty was opened → tty_out.close() called."""
+        import termios
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+        mock_file = MagicMock()
+        with patch("builtins.open", return_value=mock_file):
+            result = display._terminal_select(["A", "B", "C"], 1)
+        assert result == 1
+        mock_file.close.assert_called_once()
+
+    def test_stdin_not_tty_with_dev_tty_oserror(self, monkeypatch):
+        """stdin not TTY, /dev/tty open fails → no close call, returns default."""
+        import termios
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+        with patch("builtins.open", side_effect=OSError("no tty")):
+            result = display._terminal_select(["A", "B", "C"], 2)
+        assert result == 2
+
+
 # ── _select_account_interactive (edge cases) ────────────────────
 
 
@@ -369,3 +575,131 @@ class TestSelectAccountInteractive:
         result = display._select_account_interactive(config)
         assert result is not None
         assert result.name == "testuser"
+
+    def test_two_accounts_tty_branch(self, tmp_path, monkeypatch):
+        """Two accounts, stdin is TTY → uses _terminal_select for interactive pick."""
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_DIR", tmp_path / ".config" / "kagitch"
+        )
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_FILE",
+            tmp_path / ".config" / "kagitch" / "accounts.json",
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+        config = {
+            "accounts": {
+                "1": {"name": "alice", "config_dir": ".kaggle-alice"},
+                "2": {"name": "bob", "config_dir": ".kaggle-bob"},
+            }
+        }
+        with patch("kaggle_switch.display._terminal_select", return_value=1):
+            result = display._select_account_interactive(config)
+
+        assert result is not None
+        assert result.name == "bob"
+
+    def test_tty_branch_cancelled(self, tmp_path, monkeypatch):
+        """TTY branch where user cancels → returns None."""
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_DIR", tmp_path / ".config" / "kagitch"
+        )
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_FILE",
+            tmp_path / ".config" / "kagitch" / "accounts.json",
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+        config = {
+            "accounts": {
+                "1": {"name": "alice", "config_dir": ".kaggle-alice"},
+            }
+        }
+        with patch("kaggle_switch.display._terminal_select", return_value=None):
+            result = display._select_account_interactive(config)
+
+        assert result is None
+
+    def test_fallback_input_eof(self, tmp_path, monkeypatch):
+        """Fallback prompt raises EOFError → returns None."""
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_DIR", tmp_path / ".config" / "kagitch"
+        )
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_FILE",
+            tmp_path / ".config" / "kagitch" / "accounts.json",
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr("builtins.input", MagicMock(side_effect=EOFError()))
+
+        config = {
+            "accounts": {
+                "1": {"name": "testuser", "config_dir": ".kaggle-testuser"},
+            }
+        }
+        result = display._select_account_interactive(config)
+        assert result is None
+
+    def test_fallback_invalid_choice(self, tmp_path, monkeypatch):
+        """Fallback prompt receives non-matching input → returns None."""
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_DIR", tmp_path / ".config" / "kagitch"
+        )
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_FILE",
+            tmp_path / ".config" / "kagitch" / "accounts.json",
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "999")
+
+        config = {
+            "accounts": {
+                "1": {"name": "testuser", "config_dir": ".kaggle-testuser"},
+            }
+        }
+        result = display._select_account_interactive(config)
+        assert result is None
+
+    def test_account_with_active(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_DIR", tmp_path / ".config" / "kagitch"
+        )
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_FILE",
+            tmp_path / ".config" / "kagitch" / "accounts.json",
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        acc2_path = tmp_path / ".kaggle-active2"
+        acc2_path.mkdir(parents=True)
+        monkeypatch.setenv("KAGGLE_CONFIG_DIR", str(acc2_path))
+        monkeypatch.setattr(
+            "kaggle_switch.config.KAGGLE_DEFAULT", tmp_path / ".kaggle"
+        )
+        monkeypatch.setattr("builtins.input", lambda prompt="": "2")
+
+        config = {
+            "accounts": {
+                "1": {"name": "first", "config_dir": "first"},
+                "2": {"name": "active2", "config_dir": "active2"},
+            }
+        }
+        result = display._select_account_interactive(config)
+        assert result is not None
+        assert result.name == "active2"
+
+
+class TestFileContextManager:
+    def test_close_raises_exception(self):
+        mock_file = MagicMock()
+        mock_file.close.side_effect = RuntimeError("close failed")
+        with patch("builtins.open", return_value=mock_file):
+            with patch("kaggle_switch.display.Console") as mock_console:
+                mock_console.return_value.status.return_value.__enter__ = MagicMock()
+                mock_console.return_value.status.return_value.__exit__ = MagicMock()
+                with display._tty_status("testing"):
+                    pass

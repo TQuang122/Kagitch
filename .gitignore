@@ -20,3 +20,7 @@ pip-wheel-metadata/
 .githooks/
 uv.lock
 kernel-metadata.json
+dataset-metadata.json
+model-metadata.json
+.omo/
+*.cover
