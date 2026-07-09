@@ -7,6 +7,8 @@ stays focused on command orchestration.
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,6 +30,21 @@ from .style import (
     err,
     info,
 )
+
+_ANSI_RE = re.compile(r"\x1B\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+def _fit_plain(text: str, width: int) -> str:
+    plain = _strip_ansi(text)
+    if len(plain) <= width:
+        return plain
+    if width <= 1:
+        return plain[:width]
+    return plain[: width - 1] + "…"
 
 # ── TTY status ──────────────────────────────────────────────────
 
@@ -236,6 +253,11 @@ def _render_quota(hours_str: str) -> str:
 def _terminal_select(
     options: list[str],
     default_index: int = 0,
+    *,
+    title: str = "",
+    footer: str = "",
+    subtexts: list[str] | None = None,
+    active_index: int | None = None,
 ) -> int | None:
     """Arrow-key navigable terminal selection list.
 
@@ -256,6 +278,7 @@ def _terminal_select(
         return 0
 
     sel = max(0, min(default_index, n - 1))
+    subtexts = subtexts or [""] * n
 
     # Open /dev/tty for interactive output when stderr is redirected
     # (shell wrapper mode redirects stderr to a temp file)
@@ -269,14 +292,56 @@ def _terminal_select(
             pass
 
     def _lines() -> list[str]:
-        return [
-            f"  \u25b6 {opt}" if i == sel else f"    {opt}"
-            for i, opt in enumerate(options)
-        ]
+        term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
+        card_width = min(80, term_width - 2)
+        inner_width = max(20, card_width - 2)
+        lines: list[str] = []
+
+        if title:
+            lines.append(f"\x1b[1;36m{title}\x1b[0m")
+            lines.append("")
+
+        for i, opt in enumerate(options):
+            plain = _fit_plain(opt, inner_width - 6)
+            badge = "ACTIVE" if active_index is not None and i == active_index else ""
+
+            if i == sel:
+                content_width = inner_width - 2
+                label = f"> {plain}"
+                badge_width = len(badge) + 1 if badge else 0
+                label_width = max(1, content_width - badge_width)
+                label = _fit_plain(label, label_width)
+                gap = max(1, content_width - len(label) - badge_width)
+                row = label + (" " * gap)
+                if badge:
+                    row += f"\x1b[1;32m{badge}\x1b[0m"
+                tail_spaces = max(0, content_width - len(_strip_ansi(row)))
+
+                lines.append(f"\x1b[36m┌{'─' * inner_width}┐\x1b[0m")
+                lines.append(f"\x1b[36m│\x1b[0m {row}{' ' * tail_spaces} \x1b[36m│\x1b[0m")
+
+                sub = subtexts[i] if i < len(subtexts) else ""
+                if sub:
+                    sub = _fit_plain(sub, content_width)
+                    lines.append(f"\x1b[36m│\x1b[0m \x1b[2m{sub:<{content_width}}\x1b[0m \x1b[36m│\x1b[0m")
+
+                lines.append(f"\x1b[36m└{'─' * inner_width}┘\x1b[0m")
+            else:
+                number, sep, rest = plain.partition(". ")
+                if sep:
+                    lines.append(f"  \x1b[2m{number}\x1b[0m  {rest}")
+                else:
+                    lines.append(f"  {plain}")
+
+        if footer:
+            lines.append("")
+            lines.append(f"\x1b[2m{footer}\x1b[0m")
+
+        return lines
 
     def _draw(lines: list[str]) -> None:
-        for l in lines:
-            out.write(f"\r\x1b[K{l}\n")
+        for line in lines:
+            out.write(f"\r\x1b[K{line}\n")
         out.flush()
 
     def _cleanup(nlines: int) -> None:
@@ -351,16 +416,18 @@ def _select_account_interactive(config: dict) -> Account | None:
 
     card_options: list[str] = []
     select_options: list[str] = []
+    select_subtexts: list[str] = []
     for acc in accounts:
         label = f"{acc.number}. {acc.name}"
         card_label = label
         if acc.number == active:
             card_label += f"  [{C_OK}]active[/]"
         card_options.append(card_label)
+        select_options.append(label)
         if acc.number == active:
-            select_options.append(f"{label} (active)")
+            select_subtexts.append("current default account")
         else:
-            select_options.append(label)
+            select_subtexts.append("available account")
 
     active_idx = 0
     for i, acc in enumerate(accounts):
@@ -369,7 +436,14 @@ def _select_account_interactive(config: dict) -> Account | None:
             break
 
     if sys.stdin.isatty():
-        idx = _terminal_select(select_options, default_index=active_idx)
+        idx = _terminal_select(
+            select_options,
+            default_index=active_idx,
+            title="Choose account for kernel logs",
+            footer="↑/↓ move • Enter select • q cancel",
+            subtexts=select_subtexts,
+            active_index=active_idx,
+        )
         if idx is None:
             console.print(info("Cancelled."))
             return None

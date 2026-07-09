@@ -81,6 +81,17 @@ class TestRenderQuota:
         assert "5.00h" in result
 
 
+class TestFitPlain:
+    def test_returns_plain_when_width_sufficient(self):
+        assert display._fit_plain("abc", 3) == "abc"
+
+    def test_truncates_with_ellipsis(self):
+        assert display._fit_plain("abcdef", 4) == "abc…"
+
+    def test_width_one(self):
+        assert display._fit_plain("abcdef", 1) == "a"
+
+
 # ── _auth_method ────────────────────────────────────────────────
 
 
@@ -472,6 +483,80 @@ class TestTerminalSelectInteractive:
         mock_open.assert_called_once_with("/dev/tty", "w")
         mock_file.close.assert_called_once()
 
+    def test_rich_card_layout_contains_title_footer_and_border(self, monkeypatch):
+        import termios
+        import tty
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stdin, "fileno", lambda: 999)
+        monkeypatch.setattr(termios, "tcgetattr", lambda fd: b"old")
+        monkeypatch.setattr(termios, "tcsetattr", lambda fd, a, a2: None)
+        monkeypatch.setattr(tty, "setraw", lambda fd: None)
+
+        it = iter(["\r"])
+        monkeypatch.setattr(sys.stdin, "read", lambda n: next(it))
+
+        mock_file = MagicMock()
+        with patch("builtins.open", return_value=mock_file):
+            result = display._terminal_select(
+                ["1. alpha", "2. beta"],
+                default_index=1,
+                title="Choose account for kernel logs",
+                footer="↑/↓ move • Enter select • q cancel",
+                subtexts=["available account", "current default account"],
+                active_index=1,
+            )
+
+        assert result == 1
+        written = "".join(call.args[0] for call in mock_file.write.call_args_list)
+        assert "Choose account for kernel logs" in written
+        assert "ACTIVE" in written
+        assert "current default account" in written
+        assert "Enter select" in written
+        assert "┌" in written and "└" in written
+
+        clean = _ANSI_RE.sub("", written)
+        lines = [line for line in clean.splitlines() if line]
+        selected_lines = [line for line in lines if line.startswith("┌") or line.startswith("│") or line.startswith("└")]
+        widths = {len(line) for line in selected_lines}
+        assert len(widths) == 1
+
+    def test_rich_card_layout_strips_ansi_status_and_keeps_alignment(self, monkeypatch):
+        import termios
+        import tty
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+        monkeypatch.setattr(sys.stdin, "fileno", lambda: 999)
+        monkeypatch.setattr(termios, "tcgetattr", lambda fd: b"old")
+        monkeypatch.setattr(termios, "tcsetattr", lambda fd, a, a2: None)
+        monkeypatch.setattr(tty, "setraw", lambda fd: None)
+
+        it = iter(["\r"])
+        monkeypatch.setattr(sys.stdin, "read", lambda n: next(it))
+
+        mock_file = MagicMock()
+        with patch("builtins.open", return_value=mock_file):
+            result = display._terminal_select(
+                [
+                    "1. thanhquang71/kernel-flyp-reproduce  \x1b[32m(COMPLETE)\x1b[0m",
+                    "2. another-kernel  \x1b[1;31m(ERROR)\x1b[0m",
+                ],
+                default_index=0,
+                title="Choose kernel",
+                footer="↑/↓ move • Enter select • q cancel",
+            )
+
+        assert result == 0
+        written = "".join(call.args[0] for call in mock_file.write.call_args_list)
+        clean = _ANSI_RE.sub("", written)
+        lines = [line for line in clean.splitlines() if line]
+        selected_lines = [line for line in lines if line.startswith("┌") or line.startswith("│") or line.startswith("└")]
+        widths = {len(line) for line in selected_lines}
+        assert len(widths) == 1
+        assert "(COMPLETE)" in clean
+
     def test_dev_tty_oserror_falls_back_to_stderr(self, monkeypatch):
         import termios
         import tty
@@ -506,8 +591,6 @@ class TestTerminalSelectInteractive:
         mock_file.close.assert_called_once()
 
     def test_stdin_not_tty_after_termios_import(self, monkeypatch):
-        import termios
-
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
         result = display._terminal_select(["A", "B", "C"], 1)
@@ -515,8 +598,6 @@ class TestTerminalSelectInteractive:
 
     def test_stdin_not_tty_with_dev_tty_opened(self, monkeypatch):
         """stdin not TTY but /dev/tty was opened → tty_out.close() called."""
-        import termios
-
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
         mock_file = MagicMock()
@@ -527,8 +608,6 @@ class TestTerminalSelectInteractive:
 
     def test_stdin_not_tty_with_dev_tty_oserror(self, monkeypatch):
         """stdin not TTY, /dev/tty open fails → no close call, returns default."""
-        import termios
-
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
         with patch("builtins.open", side_effect=OSError("no tty")):
@@ -594,11 +673,15 @@ class TestSelectAccountInteractive:
                 "2": {"name": "bob", "config_dir": ".kaggle-bob"},
             }
         }
-        with patch("kaggle_switch.display._terminal_select", return_value=1):
+        with patch("kaggle_switch.display._terminal_select", return_value=1) as mock_select:
             result = display._select_account_interactive(config)
 
         assert result is not None
         assert result.name == "bob"
+        kwargs = mock_select.call_args.kwargs
+        assert kwargs["title"] == "Choose account for kernel logs"
+        assert "Enter select" in kwargs["footer"]
+        assert kwargs["active_index"] == 0
 
     def test_tty_branch_cancelled(self, tmp_path, monkeypatch):
         """TTY branch where user cancels → returns None."""
