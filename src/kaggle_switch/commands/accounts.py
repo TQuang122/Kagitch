@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import urllib.parse
 from pathlib import Path
 
 from rich.prompt import Confirm, Prompt
@@ -35,6 +36,112 @@ from ..style import (
     panel_body,
     warn,
 )
+
+_SUCCESS_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kagitch - Authenticated</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,#0f0f1a 0%,#1a1a2e 50%,#16213e 100%);
+    color:#e0e0e0
+  }
+  .card{
+    background:rgba(255,255,255,.04);backdrop-filter:blur(12px);
+    border:1px solid rgba(255,255,255,.08);border-radius:20px;
+    padding:48px 56px;text-align:center;
+    box-shadow:0 25px 50px -12px rgba(0,0,0,.5);max-width:420px
+  }
+  .brand{
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    margin-bottom:24px
+  }
+  .brand-prompt{
+    font-family:'SF Mono','Fira Code','Cascadia Code',monospace;
+    font-size:14px;font-weight:500;
+    color:rgba(52,211,153,.55)
+  }
+  .brand-text{
+    font-family:'SF Mono','Fira Code','Cascadia Code',monospace;
+    font-size:14px;font-weight:700;letter-spacing:2.5px;
+    text-transform:uppercase;
+    background:linear-gradient(135deg,#34d399,#06b6d4);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+    background-clip:text
+  }
+  .brand-cursor{
+    display:inline-block;width:6px;height:13px;
+    background:rgba(52,211,153,.6);
+    border-radius:1px;animation:blink 1s step-end infinite
+  }
+  @keyframes blink{50%{opacity:0}}
+  .icon-wrap{
+    width:56px;height:56px;margin:0 auto 20px;
+    background:rgba(52,211,153,.12);border-radius:50%;
+    display:flex;align-items:center;justify-content:center
+  }
+  .icon-wrap svg{width:28px;height:28px}
+  h1{font-size:22px;font-weight:600;color:#fff;margin-bottom:8px}
+  p{font-size:14px;color:rgba(255,255,255,.45);line-height:1.5}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <span class="brand-prompt">$</span>
+    <span class="brand-text">Kagitch</span>
+    <span class="brand-cursor"></span>
+  </div>
+  <div class="icon-wrap">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  </div>
+  <h1>Authentication Successful</h1>
+  <p>This tab will close automatically</p>
+</div>
+<script>setTimeout(window.close,3e3)</script>
+</body>
+</html>"""
+
+
+def _patch_oauth_success_page() -> None:
+    """Replace kagglesdk's OAuth success page with the branded Kagitch page."""
+    try:
+        from kagglesdk.kaggle_oauth import KaggleOAuth
+
+        handler_cls = KaggleOAuth.OAuthCallbackHandler
+        orig = handler_cls._handle_oauth_callback
+
+        def _patched(self):
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            if "code" in params and "state" in params:
+                code = params["code"][0]
+                state = params["state"][0]
+                self.send_response(200)
+                self.send_header("Content-type", "text/html")
+                self.end_headers()
+                if state == self._oauth_state.state:
+                    self.wfile.write(_SUCCESS_HTML.encode())
+                    self._on_success(code)
+                else:
+                    self.wfile.write(b"<html><body><h1>Authentication Failed</h1><p>Invalid state.</p></body></html>")
+            else:
+                self.send_response(400)
+                self.send_header("Content-type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"<html><body><h1>Authentication Failed</h1><p>Invalid callback parameters.</p></body></html>")
+
+        if orig.__code__.co_code != _patched.__code__.co_code:
+            handler_cls._handle_oauth_callback = _patched
+    except Exception:
+        pass
 
 
 def cmd_list(config: dict) -> int:
@@ -147,6 +254,7 @@ def _add_via_oauth(config: dict, name: str) -> int:
 
         client = KaggleClient()
         oauth = KaggleOAuth(client)
+        _patch_oauth_success_page()
         console.print(f"[{C_INFO}]\u25b6[/] Opening browser for Kaggle OAuth...")
         creds = oauth.authenticate(scopes=["resources.admin:*"])
         username = creds.get_username()
