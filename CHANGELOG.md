@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1] - 2026-07-10
+
+### Fixed
+- Handle empty config file gracefully (fixes crash on first `kagitch` run on Windows).
+
+### Changed
+- Published to PyPI — install via `pip install kagitch`.
+
 ## [1.4.0] - 2026-07-10
 
 ### Added

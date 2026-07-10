@@ -12,7 +12,7 @@
 ## Install
 
 ```bash
-pip install git+https://github.com/TQuang122/Kagitch.git
+pip install kagitch
 kagitch init        # interactive setup wizard (one time)
 ```
 
@@ -20,7 +20,10 @@ kagitch init        # interactive setup wizard (one time)
 >
 > **Windows / PowerShell:** `kagitch init` detects `$PROFILE` for both
 > PowerShell 5.1 and 7+. Run `kagitch init -r` to print a `. $PROFILE`
-> reload command (no `os.execv()` on Windows).
+> reload command.
+>
+> **Config path:** `%APPDATA%\kagitch\accounts.json` on Windows,
+> `~/.config/kagitch/accounts.json` on Linux/macOS.
 
 ---
 
@@ -90,7 +93,5 @@ Each account lives in `~/.kaggle-<name>/`.
 The shell wrapper sets `KAGGLE_CONFIG_DIR` when you switch.
 
 **Config stored at:**
-
-```text
-~/.config/kagitch/accounts.json
-```
+- Windows: `%APPDATA%\kagitch\accounts.json`
+- Linux/macOS: `~/.config/kagitch/accounts.json`
