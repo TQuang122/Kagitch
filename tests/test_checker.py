@@ -53,6 +53,14 @@ TPU       20.00h  0.00h      20.00h  ...
 
 
 class TestCheckAccount:
+    @pytest.fixture(autouse=True)
+    def _mock_kaggle_binary(self, monkeypatch):
+        """Mock kaggle CLI as present, so tests exercise mock paths.
+        Override per-test with monkeypatch.setattr('kaggle_switch.checker.shutil.which', lambda _: None)."""
+        monkeypatch.setattr(
+            "kaggle_switch.checker.shutil.which", lambda _: "/usr/bin/kaggle"
+        )
+
     def test_valid_account(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         acc_path = tmp_path / ".kaggle-testuser"
@@ -243,6 +251,10 @@ class TestTD:
 
 class TestTimeDeltaSerializerPatch:
     """Cover the patched _from_dict_value function body (lines 33-39)."""
+
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_sdk(self):
+        pytest.importorskip("kagglesdk")
 
     def test_none_value(self):
         """Line 33-34: None input returns None."""
@@ -556,6 +568,10 @@ class TestCheckerModuleImport:
 
 
 class TestRefreshOAuthToken:
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_requests(self):
+        pytest.importorskip("requests")
+
     def test_no_creds_file(self, tmp_path):
         """_refresh_oauth_token returns None when credentials.json missing."""
         acc = Account(number="1", name="test", config_dir="test")
@@ -791,6 +807,12 @@ class TestRunKaggle:
 
 
 class TestCheckAccountExtended:
+    @pytest.fixture(autouse=True)
+    def _mock_kaggle_binary(self, monkeypatch):
+        monkeypatch.setattr(
+            "kaggle_switch.checker.shutil.which", lambda _: "/usr/bin/kaggle"
+        )
+
     def test_kaggle_cli_not_found(self, tmp_path, monkeypatch):
         """check_account sets both error fields when kaggle CLI missing (lines 332-334)."""
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))

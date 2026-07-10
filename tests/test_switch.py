@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from kaggle_switch.commands.switch import (
     _active_username_from_account,
     _apply_account_env,
@@ -22,6 +24,10 @@ from kaggle_switch.config import Account, load_config, save_config
 
 
 class TestRefreshOauthToken:
+    @pytest.fixture(autouse=True)
+    def _skip_if_no_sdk(self):
+        pytest.importorskip("kagglesdk")
+
     def test_missing_creds_path(self, tmp_path):
         """Line 30-31: return None when credentials.json does not exist."""
         missing = tmp_path / "no-such-file.json"
