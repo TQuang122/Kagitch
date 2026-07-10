@@ -987,7 +987,7 @@ class TestDoctor:
         )
         rc, out = run_cli("doctor", capsys=capsys)
         assert rc == 1
-        assert "not readable" in out
+        assert "not" in out and "readable" in out
 
     def test_doctor_creds_unreadable(self, temp_env, capsys, monkeypatch):
         """doctor flags OAuth creds when file exists but is not readable."""

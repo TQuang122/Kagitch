@@ -374,6 +374,12 @@ class TestPatchCredsExpiry:
 
 
 class TestCheckAccount:
+    @pytest.fixture(autouse=True)
+    def _mock_kaggle_binary(self, monkeypatch):
+        monkeypatch.setattr(
+            "kaggle_switch.checker.shutil.which", lambda _: "/usr/bin/kaggle"
+        )
+
     # (existing tests are above — these are additional tests)
 
     def test_json_decode_error(self, tmp_path, monkeypatch):
