@@ -1,11 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [1.4.0] - 2026-07-10
+
+### Added
+- CI auto-publish to PyPI via GitHub Actions on version tags.
+- OAuth success page now auto-closes browser tab after 3 seconds.
 
 ### Changed
 - Made direct `kagitch switch` output human-friendly while keeping machine-readable env output for shell wrappers.
 - Improved `kagitch switch` picker validation for invalid account choices.
 - Added a README terminal snippet for the dashboard.
+- Polished OAuth success page brand with gradient text, terminal prompt, and blinking cursor.
 
 ## [1.1.0] - 2026-06-21
 
