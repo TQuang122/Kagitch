@@ -167,9 +167,9 @@ def cmd_update() -> int:
 
     git_dir = root / ".git"
     if not git_dir.is_dir():
-        console.print(err("Not a git installation (installed via pip?)."))
-        console.print(info("Re-install with:"))
-        console.print("  [green]pip install --upgrade git+https://github.com/TQuang122/Kagitch.git[/]")
+        console.print(err("Not a git installation."))
+        console.print(info("Update via PyPI:"))
+        console.print("  [green]pip install --upgrade kagitch[/]")
         return 1
 
     old_hash, old_subj = _git_head(cwd=root)
