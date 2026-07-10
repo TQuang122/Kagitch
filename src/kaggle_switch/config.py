@@ -48,7 +48,7 @@ class Account:
 
 
 def load_config() -> dict:
-    if not CONFIG_FILE.exists():
+    if not CONFIG_FILE.exists() or CONFIG_FILE.stat().st_size == 0:
         return {"accounts": {}}
     config = json.loads(CONFIG_FILE.read_text())
     _renumber_accounts(config)

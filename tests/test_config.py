@@ -33,6 +33,12 @@ class TestLoadSaveConfig:
         result = cfg.load_config()
         assert result == {"accounts": {}}
 
+    def test_load_empty_when_empty_file(self, temp_config):
+        cfg.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cfg.CONFIG_FILE.write_text("")
+        result = cfg.load_config()
+        assert result == {"accounts": {}}
+
     def test_save_creates_dir_and_file(self, temp_config):
         cfg.save_config({"accounts": {"1": {"name": "test", "config_dir": "test"}}})
         assert cfg.CONFIG_FILE.exists()
