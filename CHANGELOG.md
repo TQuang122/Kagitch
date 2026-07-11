@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.5.0] - 2026-07-12
+
+### Added
+- ASCII table detection in kernel logs — pipe-delimited tables (pandas `value_counts()`, `crosstab()`, etc.) are now rendered as Rich Tables.
+- Phase detection headers — major workflow stages (Setup, Dependencies, Training, Validation, Inference) are highlighted with styled separators.
+- `--errors-only` / `-e` flag — show only error-classified lines.
+- `--summary` flag — show only errors, warnings, and metrics (hide verbose noise).
+- `--no-group` flag — disable section separators and duplicate line collapsing.
+- Result summary panel — error/warning counts and total lines displayed after log output.
+- Kernel info header — kernel name, runtime duration, and status displayed before log content.
+- Duplicate consecutive lines are collapsed with a repeat count.
+- OAuth `credentials.json` now includes the `username` field for downstream readers.
+
+### Changed
+- `render_logs()` now returns `(error_count, warning_count, total)` instead of `None`.
+- Long log lines are truncated at 260 characters (with a `(+N)` overflow indicator) for readability.
+- `render_result()` accepts `kernel_ref` to show a header panel.
+
 ## [1.4.1] - 2026-07-10
 
 ### Fixed
