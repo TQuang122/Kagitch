@@ -10,7 +10,10 @@ from dataclasses import dataclass, field
 from typing import Iterator
 
 from rich.console import Console
+from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Table
+from rich.text import Text
 
 from .style import console as style_console
 
@@ -365,6 +368,114 @@ _NOISE_PATTERNS = re.compile(
     r"(?:wandb:|huggingface_hub|check_worker_number_rationality)", re.IGNORECASE
 )
 
+# Phase detection — recognises major workflow stages in Kaggle kernel logs
+_PHASE_PATTERNS: list[tuple[re.Pattern, str, str]] = [
+    (re.compile(r"(?:setup|initializing|configuring|preparing)", re.IGNORECASE), "Setup", "bold green"),
+    (re.compile(r"(?:pip install|installing|collecting|downloading)", re.IGNORECASE), "Dependencies", "bold yellow"),
+    (re.compile(r"(?:training|epoch|train |start training|resume training)", re.IGNORECASE), "Training", "bold magenta"),
+    (re.compile(r"(?:validating|validation|evaluating|evaluation|val )", re.IGNORECASE), "Validation", "bold cyan"),
+    (re.compile(r"(?:inference|predicting|testing|submitting)", re.IGNORECASE), "Inference", "bold blue"),
+]
+
+
+def _detect_phase(data: str) -> tuple[str, str] | None:
+    """Return (phase_label, style) if *data* signals a log phase transition, else None."""
+    lower = data.strip().lower()
+    for pattern, label, style in _PHASE_PATTERNS:
+        if bool(pattern.search(lower)):
+            return (label, style)
+    return None
+
+
+def _is_ascii_table_line(data: str) -> bool:
+    """Return True if *data* looks like part of an ASCII pipe-delimited table."""
+    stripped = data.strip()
+    if not stripped.startswith("|"):
+        return False
+    parts = [p for p in stripped.split("|") if p.strip()]
+    if len(parts) < 3:
+        return False
+    return True
+
+
+def _parse_ascii_table(raw_lines: list[str]) -> Table | None:
+    """Parse buffered ASCII table lines into a Rich Table.
+
+    Handles header, separator (|---|---|), and data rows.
+    Returns None if parsing fails.
+    """
+    headers: list[str] | None = None
+    rows: list[list[str]] = []
+
+    for line in raw_lines:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.split("|")]
+        # Strip leading/trailing empty cells from the outer pipes
+        if cells and cells[0] == "":
+            cells = cells[1:]
+        if cells and cells[-1] == "":
+            cells = cells[:-1]
+
+        if not cells:
+            continue
+
+        # Separator row → skip
+        if all(set(c) <= set("- ") for c in cells):
+            continue
+
+        if headers is None:
+            headers = cells
+        else:
+            rows.append(cells)
+
+    if not headers or not rows:
+        return None
+
+    ncols = len(headers)
+    table = Table(*headers, show_header=True, box=None, padding=(0, 1), collapse_padding=True)
+    for row in rows:
+        # Pad/truncate to match column count
+        padded = (row + [""] * ncols)[:ncols]
+        table.add_row(*padded)
+    return table
+
+
+def _merge_table_items(
+    items: list[tuple[str, str, str, str, str, int] | None],
+) -> list[tuple[str, str, str, str, str, int] | list[str] | None]:
+    """Post-process items to merge consecutive ASCII table lines into groups."""
+    result: list[tuple[str, str, str, str, str, int] | list[str] | None] = []
+    buf: list[str] = []
+
+    for item in items:
+        if item is None:
+            if buf:
+                result.append(buf)
+                buf = []
+            result.append(None)
+            continue
+
+        _ts, _icon, data_str, _style, _group, _repeats = item
+        if _repeats > 0:
+            # Repeated lines aren't table content
+            if buf:
+                result.append(buf)
+                buf = []
+            result.append(item)
+        elif _is_ascii_table_line(data_str):
+            buf.append(data_str)
+        else:
+            if buf:
+                result.append(buf)
+                buf = []
+            result.append(item)
+
+    if buf:
+        result.append(buf)
+    return result
+
 
 def _classify_line(data: str, stream: str) -> tuple[str, str]:
     """Return (icon, style) for a log line based on content, not stream.
@@ -400,51 +511,187 @@ def _classify_line(data: str, stream: str) -> tuple[str, str]:
     return "▶", "default"
 
 
+def _get_group(icon: str, style: str) -> str:
+    if style == "bold red":
+        return "error"
+    elif style == "yellow":
+        return "warning"
+    elif style == "bold cyan":
+        return "metric"
+    else:
+        return "info"
+
+
+def _prepare_items(
+    entries: list[LogEntry],
+    *,
+    base: float,
+    show_progress: bool = False,
+    errors_only: bool = False,
+    summary_view: bool = False,
+    no_group: bool = False,
+) -> list[tuple[str, str, str, str, str, int] | None]:
+    """Pre-process log entries into ordered render items.
+
+    Each item is ``(ts, icon, data, style, group, repeats)``.
+    ``None`` marks a visual section break in the output.
+    """
+    # Phase 1 — classify, assign groups, insert section breaks
+    raw: list[tuple[str, str, str, str, str] | None] = []
+    prev_group: str | None = None
+
+    for entry in entries:
+        if not show_progress and _is_progress_bar(entry.data):
+            continue
+
+        data_str = _strip_ansi(entry.data)
+        if len(data_str) > 4000:
+            data_str = data_str[:4000] + "..."
+
+        icon, style = _classify_line(data_str, entry.stream)
+        group = _get_group(icon, style)
+        ts = _format_timestamp(entry.timestamp, base)
+
+        # Section break on error ↔ non-error transitions
+        if not no_group and prev_group is not None and group != prev_group:
+            if group == "error" or prev_group == "error":
+                raw.append(None)
+        prev_group = group
+        raw.append((ts, icon, data_str, style, group))
+
+    # Phase 2 — filter by view mode
+    if errors_only:
+        raw = [i for i in raw if i is None or i[4] == "error"]
+    elif summary_view:
+        raw = [i for i in raw if i is None or i[4] in ("error", "warning", "metric")]
+
+    # Phase 3 — collapse consecutive identical lines
+    if no_group:
+        return [None if i is None else (i[0], i[1], i[2], i[3], i[4], 0) for i in raw]
+
+    collapsed: list[tuple[str, str, str, str, str, int] | None] = []
+    for item in raw:
+        if item is None:
+            collapsed.append(item)
+            continue
+        elif collapsed and collapsed[-1] is not None:
+            prev = collapsed[-1]
+            if prev[2] == item[2] and prev[4] == item[4]:
+                collapsed[-1] = (
+                    prev[0], prev[1], prev[2], prev[3], prev[4], prev[5] + 1,
+                )
+                continue
+        collapsed.append((item[0], item[1], item[2], item[3], item[4], 0))
+
+    return collapsed
+
+
 def render_logs(
     entries: list[LogEntry],
     *,
     console: Console | None = None,
     start_time: float | None = None,
     show_progress: bool = False,
-) -> None:
+    errors_only: bool = False,
+    summary_view: bool = False,
+    no_group: bool = False,
+) -> tuple[int, int, int]:
     """Render a list of LogEntry to the console.
 
     When *show_progress* is False (the default), tqdm and other
     ephemeral progress-bar lines are filtered out.
+
+    When *errors_only* is True, only error-classified lines are shown.
+
+    When *summary_view* is True, only errors, warnings, and metrics
+    are shown (verbose noise is hidden).
+
+    When *no_group* is True, section separators and duplicate
+    collapsing are disabled.
+
+    Returns (error_count, warning_count, visible_line_count).
     """
     _console = console or style_console
     if not entries:
-        return
+        return (0, 0, 0)
 
     base = start_time if start_time is not None else (entries[0].timestamp if entries else 0)
-
-    table = Table(
-        show_header=False,
-        show_edge=False,
-        show_lines=False,
-        padding=(0, 1),
-        box=None,
+    items = _prepare_items(
+        entries,
+        base=base,
+        show_progress=show_progress,
+        errors_only=errors_only,
+        summary_view=summary_view,
+        no_group=no_group,
     )
-    table.add_column("time", style="bright_black", width=9, no_wrap=True)
-    table.add_column("icon", width=2, no_wrap=True)
-    table.add_column("data")
 
-    for entry in entries:
-        # Filter ephemeral progress bars
-        if not show_progress and _is_progress_bar(entry.data):
+    # Merge consecutive ASCII table lines into table groups
+    if not no_group:
+        items = _merge_table_items(items)
+
+    counts: dict[str, int] = {"error": 0, "warning": 0, "total": 0}
+    current_phase: str | None = None
+
+    for item in items:
+        if item is None:
+            _console.print(Rule(style="bright_black"))
             continue
 
-        ts = _format_timestamp(entry.timestamp, base)
-        data_str = _strip_ansi(entry.data)
+        # Table group — render as a Rich Table
+        if isinstance(item, list):
+            table = _parse_ascii_table(item)
+            if table is not None:
+                _console.print()
+                _console.print(table)
+                _console.print()
+            else:
+                for line in item:
+                    _console.print(f"  [default]{line}[/]")
+            counts["total"] += len(item)
+            continue
 
-        # Truncate overly long lines
-        if len(data_str) > 4000:
-            data_str = data_str[:4000] + "..."
+        ts, icon, data_str, style, group, repeats = item
+        counts["total"] += 1
+        if group == "error":
+            counts["error"] += 1
+        elif group == "warning":
+            counts["warning"] += 1
 
-        icon, style = _classify_line(data_str, entry.stream)
-        table.add_row(ts, icon, data_str, style=style)
+        # Phase detection — show styled header when a new major phase starts
+        if not no_group:
+            phase = _detect_phase(data_str)
+            if phase is not None and phase[0] != current_phase:
+                phase_label, phase_style = phase
+                current_phase = phase_label
+                _console.print()
+                _console.print(f"  [{phase_style}]\u25b6 {phase_label}[/]")
+                _console.print(Rule(style="bright_black"))
 
-    _console.print(table)
+        # Truncate very long lines for readability
+        display_str = data_str
+        if len(display_str) > 260:
+            display_str = display_str[:255] + "[dim]...[bright_black](+{})[/][/]".format(len(display_str) - 255)
+
+        # Two-column layout: fixed-width time column | log data column
+        time_col = Text(f"{ts}", style="bright_black")
+        data_col = Text()
+        data_col.append(f"{icon} ", style=style)
+        data_col.append(display_str, style=style)
+
+        row = Table.grid(padding=0)
+        row.add_column(width=8, justify="right")
+        row.add_column(ratio=1)
+        row.add_row(time_col, data_col)
+        _console.print(row)
+
+        if repeats:
+            label = (
+                f"  \u2191 repeated {repeats}"
+                f" time{'s' if repeats > 1 else ''}"
+            )
+            _console.print(label, style="bright_black")
+
+    return (counts["error"], counts["warning"], counts["total"])
 
 
 def _infer_fix_hint(entries: list[LogEntry]) -> str | None:
@@ -454,18 +701,33 @@ def _infer_fix_hint(entries: list[LogEntry]) -> str | None:
 
     hints = {
         ("cuda out of memory", "out of memory"): "Reduce batch size or use a smaller model",
-        ("floatingpointerror",): "Check for NaN in loss/activations \u2014 try gradient clipping or reduce LR",
-        ("cudnn_status_not_initialized",): "Restart kernel \u2014 CUDA state was reset mid-run",
+        ("floatingpointerror",): "Check for NaN in loss/activations — try gradient clipping or reduce LR",
+        ("cudnn_status_not_initialized",): "Restart kernel — CUDA state was reset mid-run",
         ("no module named", "importerror"): "Add missing pip install to your kernel notebook",
-        ("kaggle_secrets", "usersecrets"): "Secrets may be expired \u2014 re-add them in Kaggle UI",
-        ("kernel died", "kernel unexpectedly"): "Kernel ran out of memory \u2014 reduce model size or batch",
-        ("interrupted", "timeout"): "CPU/GPU time limit exceeded \u2014 optimize runtime",
-        ("connection refused", "timeouterror"): "Network issue \u2014 check Kaggle status",
+        ("kaggle_secrets", "usersecrets"): "Secrets may be expired — re-add them in Kaggle UI",
+        ("kernel died", "kernel unexpectedly"): "Kernel ran out of memory — reduce model size or batch",
+        ("interrupted", "timeout"): "CPU/GPU time limit exceeded — optimize runtime",
+        ("connection refused", "timeouterror"): "Network issue — check Kaggle status",
     }
     for keywords, hint in hints.items():
         if all(kw in full for kw in keywords):
             return hint
     return None
+
+
+def _format_duration(seconds: float) -> str:
+    """Format a duration in seconds to a human-friendly string."""
+    if seconds < 1:
+        return "<1s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours = minutes // 60
+    minutes = minutes % 60
+    return f"{hours}h {minutes}m {secs}s"
 
 
 def render_result(
@@ -474,8 +736,16 @@ def render_result(
     console: Console | None = None,
     start_time: float | None = None,
     show_progress: bool = False,
+    errors_only: bool = False,
+    summary_view: bool = False,
+    no_group: bool = False,
+    kernel_ref: str = "",
 ) -> str | None:
-    """Render a fully fetched log result. Returns fix hint if one applies."""
+    """Render a fully fetched log result. Returns fix hint if one applies.
+
+    When *kernel_ref* is provided, a header Panel with kernel name and
+    runtime summary is displayed before the log content.
+    """
     _console = console or style_console
 
     if result.error:
@@ -486,18 +756,70 @@ def render_result(
         _console.print("[dim]No log output yet.[/]")
         return None
 
-    render_logs(result.entries, console=_console, start_time=start_time, show_progress=show_progress)
+    # ── Header panel ───────────────────────────────────────────
+    if kernel_ref:
+        header_lines: list[str] = []
+        ref_display = kernel_ref
+        header_lines.append(f"[bold cyan]{ref_display}[/]")
 
-    hint = None
-    if result.entries:
-        hint = _infer_fix_hint(result.entries)
-        if hint:
-            from rich.panel import Panel
-            _console.print()
-            _console.print(Panel(
-                f"[yellow]\u26a0 [bold]Possible fix:[/bold] {hint}[/]",
-                border_style="yellow",
-            ))
+        # Compute runtime from first/last entry timestamps
+        valid_ts = [e.timestamp for e in result.entries if e.timestamp > 0]
+        if valid_ts:
+            runtime = valid_ts[-1] - valid_ts[0]
+            header_lines.append(
+                f"[dim]Runtime:[/dim] [white]{_format_duration(runtime)}[/]"
+            )
+
+        if result.status:
+            status_colors = {
+                "COMPLETE": "green", "complete": "green",
+                "ERROR": "bold red", "error": "bold red",
+                "RUNNING": "yellow", "running": "yellow",
+            }
+            sc = status_colors.get(result.status, "dim")
+            header_lines.append(f"[dim]Status:[/dim] [{sc}]\u25cf {result.status}[/]")
+
+        _console.print()
+        _console.print(Panel(
+            "\n".join(header_lines),
+            border_style="blue",
+            padding=(0, 1),
+        ))
+        _console.print()
+
+    errors, warnings, total = render_logs(
+        result.entries, console=_console, start_time=start_time,
+        show_progress=show_progress, errors_only=errors_only,
+        summary_view=summary_view, no_group=no_group,
+    )
+
+    if total > 0:
+        # ── Summary panel ──────────────────────────────────────
+        summary_parts: list[str] = []
+        if errors:
+            summary_parts.append(
+                f"[red]\u2718 {errors} error{'s' if errors != 1 else ''}[/]"
+            )
+        if warnings:
+            summary_parts.append(
+                f"[yellow]\u26a0 {warnings}"
+                f" warning{'s' if warnings != 1 else ''}[/]"
+            )
+        summary_parts.append(f"[dim]{total} line{'s' if total != 1 else ''}[/]")
+        _console.print()
+        _console.print(Panel(
+            "  " + "   ".join(summary_parts),
+            border_style="bright_black",
+            padding=(0, 1),
+        ))
+
+    hint = _infer_fix_hint(result.entries) if result.entries else None
+    if hint:
+        _console.print()
+        _console.print(Panel(
+            f"[yellow]\u26a0 [bold]Possible fix:[/bold] {hint}[/]",
+            border_style="yellow",
+        ))
     return hint
 
 
@@ -525,6 +847,9 @@ def render_logs_help() -> None:
     style_console.print("  [cyan]--stdout[/]        Show only stdout lines")
     style_console.print("  [cyan]--stderr[/]        Show only stderr lines")
     style_console.print("  [cyan]--show-progress[/] Show progress-bar lines (filtered by default)")
+    style_console.print("  [cyan]-e, --errors-only[/] Show only error-classified lines")
+    style_console.print("  [cyan]--summary[/]       Show only errors, warnings, and metrics")
+    style_console.print("  [cyan]--no-group[/]      Disable section separators and duplicate collapsing")
     style_console.print("  [cyan]-b, --browse[/]    Interactive kernel picker (no <kernel> argument)")
     style_console.print("  [cyan]-h, --help[/]     Show this help")
     style_console.print()
@@ -534,3 +859,5 @@ def render_logs_help() -> None:
     style_console.print("  [dim]kagitch kernel logs --browse[/]")
     style_console.print("  [dim]kagitch kernel logs my-kernel --stderr[/]")
     style_console.print("  [dim]kagitch kernel logs my-kernel --show-progress[/]")
+    style_console.print("  [dim]kagitch kernel logs my-kernel --errors-only[/]")
+    style_console.print("  [dim]kagitch kernel logs my-kernel --summary[/]")

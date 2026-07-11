@@ -423,16 +423,20 @@ def cmd_patch(config: dict, args: list[str]) -> int:
 
 def _parse_logs_args(
     rest: list[str],
-) -> tuple[list[str], bool, int, str | None, bool, bool]:
+) -> tuple[list[str], bool, int, str | None, bool, bool, bool, bool, bool]:
     """Parse args for ``kagitch kernel logs``.
 
-    Returns (positional_args, follow, line_limit, stream_filter, show_progress, browse).
+    Returns (positional_args, follow, line_limit, stream_filter,
+             show_progress, browse, errors_only, summary, no_group).
     """
     follow = False
     browse = False
     line_limit = 0
     stream_filter: str | None = None
     show_progress = False
+    errors_only = False
+    summary_view = False
+    no_group = False
     positional: list[str] = []
     i = 0
     while i < len(rest):
@@ -453,12 +457,18 @@ def _parse_logs_args(
             stream_filter = "stderr"
         elif a == "--show-progress":
             show_progress = True
+        elif a in ("-e", "--errors-only"):
+            errors_only = True
+        elif a == "--summary":
+            summary_view = True
+        elif a == "--no-group":
+            no_group = True
         elif a in ("--help", "-h", "help"):
             positional.append("--help")
         else:
             positional.append(a)
         i += 1
-    return positional, follow, line_limit, stream_filter, show_progress, browse
+    return positional, follow, line_limit, stream_filter, show_progress, browse, errors_only, summary_view, no_group
 
 
 def _auto_switch_for_kernel(config: dict, kernel_slug: str) -> bool:
@@ -500,7 +510,7 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
         render_result,
     )
 
-    positional, follow, line_limit, stream_filter, show_progress, browse = _parse_logs_args(rest)
+    positional, follow, line_limit, stream_filter, show_progress, browse, errors_only, summary_view, no_group = _parse_logs_args(rest)
 
     enter_browse = browse or (not positional and "--help" not in positional)
 
@@ -524,13 +534,25 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
 
     if follow:
         if result.entries:
-            render_logs(result.entries, show_progress=show_progress)
+            render_logs(
+                result.entries,
+                show_progress=show_progress,
+                errors_only=errors_only,
+                summary_view=summary_view,
+                no_group=no_group,
+            )
         try:
             for new_batch in fetch_logs_follow(kernel, on_status=lambda r: None):
                 if stream_filter:
                     new_batch = [e for e in new_batch if e.stream == stream_filter]
                 if new_batch:
-                    render_logs(new_batch, show_progress=show_progress)
+                    render_logs(
+                        new_batch,
+                        show_progress=show_progress,
+                        errors_only=errors_only,
+                        summary_view=summary_view,
+                        no_group=no_group,
+                    )
         except KeyboardInterrupt:
             console.print()
             console.print("[dim]\u2718 Interrupted by user[/]")
@@ -540,7 +562,14 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
         result.entries = [e for e in result.entries if e.stream == stream_filter]
     if line_limit > 0:
         result.entries = result.entries[-line_limit:]
-    render_result(result, show_progress=show_progress)
+    render_result(
+        result,
+        show_progress=show_progress,
+        errors_only=errors_only,
+        summary_view=summary_view,
+        no_group=no_group,
+        kernel_ref=kernel,
+    )
     return 0
 
 
@@ -635,5 +664,5 @@ def _browse_kernel_logs(config: dict) -> int:
         console.print(f"[red]\u2718 {result.error}[/]")
         return 1
 
-    render_result(result)
+    render_result(result, kernel_ref=kernel)
     return 0

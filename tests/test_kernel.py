@@ -232,13 +232,16 @@ class TestActiveUsername:
 
 class TestParseLogsArgs:
     def test_empty(self):
-        pos, follow, limit, stream, progress, browse = kn._parse_logs_args([])
+        pos, follow, limit, stream, progress, browse, errors_only, summary_view, no_group = kn._parse_logs_args([])
         assert pos == []
         assert follow is False
         assert limit == 0
         assert stream is None
         assert progress is False
         assert browse is False
+        assert errors_only is False
+        assert summary_view is False
+        assert no_group is False
 
     def test_positional_only(self):
         pos, *_, = kn._parse_logs_args(["my-kernel"])
@@ -253,11 +256,11 @@ class TestParseLogsArgs:
         assert follow is True
 
     def test_browse_flag(self):
-        *_, browse = kn._parse_logs_args(["-b"])
+        *_, browse, _, _, _ = kn._parse_logs_args(["-b"])
         assert browse is True
 
     def test_browse_long(self):
-        *_, browse = kn._parse_logs_args(["--browse"])
+        *_, browse, _, _, _ = kn._parse_logs_args(["--browse"])
         assert browse is True
 
     def test_line_limit(self):
@@ -274,15 +277,15 @@ class TestParseLogsArgs:
         assert limit == 0
 
     def test_stream_stdout(self):
-        *_, stream, _, _ = kn._parse_logs_args(["--stdout"])
+        *_, stream, _, _, _, _, _ = kn._parse_logs_args(["--stdout"])
         assert stream == "stdout"
 
     def test_stream_stderr(self):
-        *_, stream, _, _ = kn._parse_logs_args(["--stderr"])
+        *_, stream, _, _, _, _, _ = kn._parse_logs_args(["--stderr"])
         assert stream == "stderr"
 
     def test_show_progress(self):
-        _, _, _, _, progress, _ = kn._parse_logs_args(["--show-progress"])
+        _, _, _, _, progress, _, _, _, _ = kn._parse_logs_args(["--show-progress"])
         assert progress is True
 
     def test_help_shorthand(self):
@@ -302,7 +305,7 @@ class TestParseLogsArgs:
         assert pos == ["kernel1", "kernel2"]
 
     def test_mixed_flags(self):
-        pos, follow, limit, stream, progress, browse = kn._parse_logs_args(
+        pos, follow, limit, stream, progress, *rest = kn._parse_logs_args(
             ["owner/kernel", "-f", "-n", "20", "--stderr", "--show-progress"]
         )
         assert pos == ["owner/kernel"]
@@ -310,10 +313,11 @@ class TestParseLogsArgs:
         assert limit == 20
         assert stream == "stderr"
         assert progress is True
+        assert rest == [False, False, False, False]  # browse, errors_only, summary_view, no_group
 
     def test_follow_with_browse(self):
         """-f and -b can both be set."""
-        _, follow, _, _, _, browse = kn._parse_logs_args(["-f", "-b"])
+        _, follow, _, _, _, browse, _, _, _ = kn._parse_logs_args(["-f", "-b"])
         assert follow is True
         assert browse is True
 

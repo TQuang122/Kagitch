@@ -1,6 +1,7 @@
 """Account CRUD & listing commands."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -271,6 +272,12 @@ def _add_via_oauth(config: dict, name: str) -> int:
     target_dir.mkdir(parents=True, exist_ok=True)
     dest = target_dir / "credentials.json"
     shutil.copy2(src, dest)
+    # Inject username so _active_username_from_account() and downstream
+    # readers can find it.
+    _creds = json.loads(dest.read_text())
+    if username:
+        _creds["username"] = username
+    dest.write_text(json.dumps(_creds, indent=2))
     if sys.platform != "win32":
         dest.chmod(0o600)
 

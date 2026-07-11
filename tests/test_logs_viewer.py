@@ -521,6 +521,98 @@ class TestRenderEdges:
         assert "…" in out or "..." in out
         assert "+    0s" in out or "+  0.0s" in out or "+    0s".strip() in out
 
+    def test_render_logs_warning_and_metric_lines(self):
+        """Warning and metric entries exercise _get_group's yellow/bold cyan branches."""
+        entries = [
+            LogEntry("stderr", 0, "UserWarning: Some deprecation"),
+            LogEntry("stdout", 0, "Epoch 1: loss=0.3509"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console)
+        out = buf.getvalue()
+        assert "UserWarning" in out
+        assert "Epoch 1" in out
+
+    def test_render_logs_errors_only_filter(self):
+        """errors_only=True shows only error entries."""
+        entries = [
+            LogEntry("stderr", 0, "RuntimeError: OOM"),
+            LogEntry("stdout", 0, "Training started"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console, errors_only=True)
+        out = buf.getvalue()
+        assert "OOM" in out
+        assert "Training started" not in out
+
+    def test_render_logs_summary_view_filter(self):
+        """summary_view=True shows errors, warnings, metrics but not info."""
+        entries = [
+            LogEntry("stderr", 0, "RuntimeError: OOM"),
+            LogEntry("stderr", 0, "UserWarning: Deprecation"),
+            LogEntry("stdout", 0, "Cloning into repo..."),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console, summary_view=True)
+        out = buf.getvalue()
+        assert "OOM" in out
+        assert "Deprecation" in out
+        assert "Cloning into repo" not in out
+
+    def test_render_logs_no_group(self):
+        """no_group=True skips section breaks and collapsing."""
+        entries = [
+            LogEntry("stdout", 0, "same message"),
+            LogEntry("stdout", 0, "same message"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console, no_group=True)
+        out = buf.getvalue()
+        assert out.count("same message") == 2
+
+    def test_render_logs_collapses_identical_consecutive(self):
+        """Two consecutive identical entries are collapsed with repeat count."""
+        entries = [
+            LogEntry("stdout", 0, "duplicate line"),
+            LogEntry("stdout", 0, "duplicate line"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console)
+        out = buf.getvalue()
+        assert out.count("duplicate line") == 1
+        assert "repeated" in out
+
+    def test_render_logs_section_break_between_error_and_info(self):
+        """Error/group transition inserts a separator line."""
+        entries = [
+            LogEntry("stderr", 0, "RuntimeError: OOM"),
+            LogEntry("stdout", 0, "Cloning into repo..."),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_logs(entries, console=console)
+        out = buf.getvalue()
+        assert "OOM" in out
+        assert "Cloning into repo" in out
+        assert "\u2500" in out
+
+    def test_render_result_with_warnings(self):
+        """Warning entries produce warning count in summary."""
+        result = LogFetchResult(entries=[
+            LogEntry("stderr", 0, "UserWarning: Some deprecation"),
+        ])
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        render_result(result, console=console)
+        out = buf.getvalue()
+        assert "warning" in out
+        assert "warnings" in out or "warning" in out
+
     def test_render_result_displays_hint_panel(self):
         result = LogFetchResult(entries=[LogEntry("stderr", 0, "FloatingPointError: NaN in loss")])
         buf = io.StringIO()
