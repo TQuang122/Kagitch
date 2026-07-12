@@ -630,6 +630,279 @@ class TestRenderEdges:
         assert "Usage" in first_arg
 
 
+class TestIsAsciiTableLine:
+    """Tests for _is_ascii_table_line — edge cases."""
+
+    def test_no_pipe_start(self):
+        assert lv._is_ascii_table_line("hello") is False
+
+    def test_just_pipe_no_parts(self):
+        assert lv._is_ascii_table_line("|") is False
+
+    def test_less_than_three_parts(self):
+        assert lv._is_ascii_table_line("| col1 | col2 |") is False
+
+    def test_three_or_more_parts(self):
+        assert lv._is_ascii_table_line("| col1 | col2 | col3 |") is True
+
+    def test_leading_whitespace_pipe_start(self):
+        assert lv._is_ascii_table_line("  | a | b | c |") is True
+
+    def test_not_pipe_three_parts_elsewhere(self):
+        assert lv._is_ascii_table_line("a | b | c") is False
+
+
+class TestParseAsciiTable:
+    """Tests for _parse_ascii_table."""
+
+    def test_valid_table(self):
+        lines = [
+            "| Name | Value |",
+            "|------|-------|",
+            "|  A   |   1   |",
+            "|  B   |   2   |",
+        ]
+        table = lv._parse_ascii_table(lines)
+        assert table is not None
+        assert table.columns[0].header == "Name"
+        assert table.columns[1].header == "Value"
+
+    def test_headers_only_no_rows(self):
+        lines = ["| Col1 | Col2 |"]
+        assert lv._parse_ascii_table(lines) is None
+
+    def test_empty_input(self):
+        assert lv._parse_ascii_table([]) is None
+
+    def test_separator_only(self):
+        lines = [
+            "|------|-------|",
+        ]
+        assert lv._parse_ascii_table(lines) is None
+
+    def test_extra_spaces_and_blank_cells(self):
+        lines = [
+            "|  H1  |  H2  |  H3  |",
+            "|---|---|---|",
+            "|  x  |  y  |  z  |",
+        ]
+        table = lv._parse_ascii_table(lines)
+        assert table is not None
+        assert len(table.columns) == 3
+
+    def test_row_truncated_to_column_count(self):
+        lines = [
+            "| H1 | H2 |",
+            "|----|----|",
+            "| a | b | c |",
+        ]
+        table = lv._parse_ascii_table(lines)
+        assert table is not None
+        assert len(table.columns) == 2
+
+    def test_non_pipe_line_skipped(self):
+        lines = [
+            "not a table line",
+            "| H1 | H2 |",
+            "|----|----|",
+            "| a | b |",
+        ]
+        table = lv._parse_ascii_table(lines)
+        assert table is not None
+
+
+class TestMergeTableItems:
+    """Tests for _merge_table_items — table line merging."""
+
+    def make_item(self, data: str, repeats: int = 0):
+        return ("+0.0s", ">", data, "default", "info", repeats)
+
+    def test_empty_input(self):
+        assert lv._merge_table_items([]) == []
+
+    def test_none_item_alone(self):
+        result = lv._merge_table_items([None])
+        assert result == [None]
+
+    def test_none_with_pending_buf(self):
+        """None item flushes pending table buf before appending None."""
+        item_a = self.make_item("| a | b | c |")
+        result = lv._merge_table_items([item_a, None])
+        assert result[0] == ["| a | b | c |"]
+        assert result[1] is None
+
+    def test_repeated_line_with_pending_buf(self):
+        """Repeated line (repeats > 0) flushes buf before appending item."""
+        item_a = self.make_item("| a | b | c |")
+        item_b = self.make_item("repeated line", repeats=2)
+        result = lv._merge_table_items([item_a, item_b])
+        assert result[0] == ["| a | b | c |"]
+        assert result[1] == item_b
+
+    def test_ascii_table_line_added_to_buf(self):
+        """ASCII table line is appended to buf."""
+        item = self.make_item("| a | b | c |")
+        result = lv._merge_table_items([item])
+        assert result == [["| a | b | c |"]]
+
+    def test_multi_line_table_grouped(self):
+        """Multiple consecutive table lines merged into one list."""
+        items = [
+            self.make_item("| h1 | h2 | h3 |"),
+            self.make_item("|----|----|-----|"),
+            self.make_item("| x  | y  |  z  |"),
+        ]
+        result = lv._merge_table_items(items)
+        assert len(result) == 1
+        assert isinstance(result[0], list)
+        assert result[0] == ["| h1 | h2 | h3 |", "|----|----|-----|", "| x  | y  |  z  |"]
+
+    def test_non_table_line_flushes_buf(self):
+        """Non-table line flushes pending buf, then appends item."""
+        item_a = self.make_item("| a | b | c |")
+        item_b = self.make_item("normal line")
+        result = lv._merge_table_items([item_a, item_b])
+        assert result[0] == ["| a | b | c |"]
+        assert result[1] == item_b
+
+    def test_trailing_buf_flush_at_end(self):
+        """Pending table buf is flushed at end of items."""
+        item_a = self.make_item("| a | b | c |")
+        item_b = self.make_item("| d | e | f |")
+        result = lv._merge_table_items([item_a, item_b])
+        assert len(result) == 1
+        assert isinstance(result[0], list)
+        assert result[0] == ["| a | b | c |", "| d | e | f |"]
+
+
+class TestFormatDuration:
+    """Tests for _format_duration."""
+
+    def test_less_than_one_second(self):
+        assert lv._format_duration(0.5) == "<1s"
+        assert lv._format_duration(0) == "<1s"
+
+    def test_seconds_only(self):
+        assert lv._format_duration(45) == "45s"
+
+    def test_minutes_and_seconds(self):
+        assert lv._format_duration(90) == "1m 30s"
+
+    def test_hours_minutes_seconds(self):
+        assert lv._format_duration(3661) == "1h 1m 1s"
+        assert lv._format_duration(7322) == "2h 2m 2s"
+
+    def test_exactly_60_seconds(self):
+        assert lv._format_duration(60) == "1m 0s"
+
+    def test_exactly_3600_seconds(self):
+        assert lv._format_duration(3600) == "1h 0m 0s"
+
+
+class TestRenderResultWithKernelRef:
+    """Tests for render_result with kernel_ref header panel."""
+
+    def test_kernel_ref_shows_header(self, capsys):
+        result = LogFetchResult(entries=[
+            LogEntry("stdout", 1000.0, "Training started"),
+        ])
+        lv.render_result(result, kernel_ref="owner/my-kernel")
+        captured = capsys.readouterr()
+        assert "owner/my-kernel" in captured.out
+
+    def test_kernel_ref_shows_runtime(self, capsys):
+        result = LogFetchResult(entries=[
+            LogEntry("stdout", 1000.0, "start"),
+            LogEntry("stdout", 1100.0, "end"),
+        ])
+        lv.render_result(result, kernel_ref="owner/kernel")
+        captured = capsys.readouterr()
+        assert "Runtime" in captured.out
+
+    def test_kernel_ref_with_status(self, capsys):
+        result = LogFetchResult(
+            entries=[LogEntry("stdout", 1000.0, "done")],
+            status="COMPLETE",
+        )
+        lv.render_result(result, kernel_ref="owner/kernel")
+        captured = capsys.readouterr()
+        assert "COMPLETE" in captured.out
+
+    def test_kernel_ref_status_running(self, capsys):
+        result = LogFetchResult(
+            entries=[LogEntry("stdout", 1000.0, "still going")],
+            status="RUNNING",
+        )
+        lv.render_result(result, kernel_ref="owner/kernel")
+        captured = capsys.readouterr()
+        assert "RUNNING" in captured.out
+
+    def test_kernel_ref_unknown_status(self, capsys):
+        result = LogFetchResult(
+            entries=[LogEntry("stdout", 1000.0, "done")],
+            status="UNKNOWN_STATUS",
+        )
+        lv.render_result(result, kernel_ref="owner/kernel")
+        captured = capsys.readouterr()
+        assert "UNKNOWN_STATUS" in captured.out
+
+    def test_kernel_ref_without_valid_timestamps(self, capsys):
+        """No runtime line when all timestamps are zero."""
+        result = LogFetchResult(entries=[
+            LogEntry("stdout", 0, "no timestamp"),
+        ])
+        lv.render_result(result, kernel_ref="owner/kernel")
+        captured = capsys.readouterr()
+        assert "owner/kernel" in captured.out
+
+    def test_render_logs_with_table_entries(self, capsys):
+        """render_logs renders ASCII table entries as grouped Rich Tables."""
+        entries = [
+            LogEntry("stdout", 1000.0, "| Col1 | Col2 | Col3 |"),
+            LogEntry("stdout", 1000.0, "|------|------|------|"),
+            LogEntry("stdout", 1000.0, "| A    | B    | C    |"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        errors, warnings, total = lv.render_logs(entries, console=console)
+        out = buf.getvalue()
+        assert total == 3
+        assert "Col1" in out
+        assert "Col2" in out
+        assert "Col3" in out
+        assert "A" in out
+
+    def test_render_logs_table_parse_failure_fallback(self, capsys):
+        """When table parsing fails, lines render as plain text."""
+        entries = [
+            LogEntry("stdout", 1000.0, "| just headers"),
+            LogEntry("stdout", 1000.0, "| still headers"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        errors, warnings, total = lv.render_logs(entries, console=console)
+        out = buf.getvalue()
+        assert total == 2
+        assert "just headers" in out
+        assert "still headers" in out
+
+    def test_render_logs_table_mixed_with_normal_lines(self, capsys):
+        """Table lines and normal lines coexist in output."""
+        entries = [
+            LogEntry("stdout", 1000.0, "| H1 | H2 |"),
+            LogEntry("stdout", 1000.0, "|---|-----|"),
+            LogEntry("stdout", 1000.0, "| A |  1  |"),
+            LogEntry("stdout", 1000.0, "normal line"),
+        ]
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False)
+        errors, warnings, total = lv.render_logs(entries, console=console)
+        out = buf.getvalue()
+        assert total == 4
+        assert "H1" in out
+        assert "normal line" in out
+
+
 class TestTryKaggleApi:
     def test_try_kaggle_api_failure_returns_none(self):
         original_import = __import__
