@@ -294,6 +294,38 @@ class TestTtyStatus:
 # We test the early-return edge cases here.
 
 
+# ── _open_tty ─────────────────────────────────────────────────────
+
+
+class TestOpenTty:
+
+    def test_unix_opens_dev_tty(self):
+        mock_file = MagicMock()
+        with patch("builtins.open", return_value=mock_file) as mock_open:
+            result = display._open_tty("r")
+        assert result is mock_file
+        mock_open.assert_called_once_with("/dev/tty", "r")
+
+    def test_unix_oserror_returns_none(self):
+        with patch("builtins.open", side_effect=OSError):
+            result = display._open_tty("r")
+        assert result is None
+
+    def test_windows_opens_con(self):
+        mock_file = MagicMock()
+        with patch.object(display.os, "name", "nt"):
+            with patch("builtins.open", return_value=mock_file) as mock_open:
+                result = display._open_tty("w")
+        assert result is mock_file
+        mock_open.assert_called_once_with("CON", "w")
+
+    def test_windows_oserror_returns_none(self):
+        with patch.object(display.os, "name", "nt"):
+            with patch("builtins.open", side_effect=OSError):
+                result = display._open_tty("w")
+        assert result is None
+
+
 class TestTerminalSelectEdgeCases:
     def test_empty_list_returns_none(self):
         assert display._terminal_select([]) is None
@@ -580,15 +612,14 @@ class TestTerminalSelectInteractive:
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
 
-        mock_file = MagicMock()
-        with patch("builtins.open", return_value=mock_file):
+        with patch("builtins.open") as mock_open:
             with patch.dict(
                 "sys.modules", {"termios": None, "tty": None}, clear=False
             ):
                 result = display._terminal_select(["A", "B", "C"], 2)
 
         assert result == 2
-        mock_file.close.assert_called_once()
+        mock_open.assert_not_called()
 
     def test_stdin_not_tty_after_termios_import(self, monkeypatch):
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
@@ -613,6 +644,113 @@ class TestTerminalSelectInteractive:
         with patch("builtins.open", side_effect=OSError("no tty")):
             result = display._terminal_select(["A", "B", "C"], 2)
         assert result == 2
+
+    def test_dispatcher_routes_to_win_when_nt(self):
+        with patch.object(display.os, "name", "nt"):
+            with patch.object(display, "_terminal_select_win", return_value=1) as mock_win:
+                result = display._terminal_select(["A", "B", "C"], default_index=1)
+        assert result == 1
+        mock_win.assert_called_once_with(
+            ["A", "B", "C"], 1,
+            title="", footer="",
+            subtexts=["", "", ""], active_index=None,
+        )
+
+
+# ── _terminal_select_win (Windows msvcrt) ──────────────────────
+
+
+class TestTerminalSelectWin:
+
+    def test_enter_selects_default(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B", "C"], 1,
+                    title="", footer="", subtexts=[""] * 3, active_index=None,
+                )
+        assert result == 1
+
+    def test_arrow_down_then_enter(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\xe0", b"P", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B", "C"], 0,
+                    title="", footer="", subtexts=[""] * 3, active_index=None,
+                )
+        assert result == 1
+
+    def test_arrow_up_wraps_to_last(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\xe0", b"H", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B", "C"], 0,
+                    title="", footer="", subtexts=[""] * 3, active_index=None,
+                )
+        assert result == 2
+
+    def test_q_cancels(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"q"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B"], 0,
+                    title="", footer="", subtexts=[""] * 2, active_index=None,
+                )
+        assert result is None
+
+    def test_ctrl_c_cancels(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\x03"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B"], 0,
+                    title="", footer="", subtexts=[""] * 2, active_index=None,
+                )
+        assert result is None
+
+    def test_unknown_arrow_continues(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\xe0", b"M", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B"], 0,
+                    title="", footer="", subtexts=[""] * 2, active_index=None,
+                )
+        assert result == 0
+
+    def test_non_arrow_byte_continues(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"x", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B"], 0,
+                    title="", footer="", subtexts=[""] * 2, active_index=None,
+                )
+        assert result == 0
+
+    def test_tty_out_closed_on_exit(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\r"]
+        mock_file = MagicMock()
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=mock_file):
+                result = display._terminal_select_win(
+                    ["A", "B"], 0,
+                    title="", footer="", subtexts=[""] * 2, active_index=None,
+                )
+        assert result == 0
+        mock_file.close.assert_called_once()
 
 
 # ── _select_account_interactive (edge cases) ────────────────────

@@ -627,11 +627,12 @@ def _browse_kernel_logs(config: dict) -> int:
     if sys.stderr.isatty():
         console.print(table)
     else:
-        try:
-            with open("/dev/tty", "w") as tty:
+        tty = display._open_tty("w")
+        if tty is not None:
+            with tty:
                 tty_console = Console(file=tty, force_terminal=True)
                 tty_console.print(table)
-        except OSError:
+        else:
             console.print(table)
 
     _ANSI_STATUS_COLORS = {

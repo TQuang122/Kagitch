@@ -50,10 +50,7 @@ def cmd_init(args: list[str] | None = None) -> int:
     # Shell wrapper captures 2>&1 -> interactive wizard output would be
     # invisible.  Open /dev/tty directly to bypass the capture.
     if os.environ.get("KAGITCH_SHELL_WRAPPER"):
-        try:
-            tty = open("/dev/tty", "w")
-        except OSError:
-            tty = None
+        tty = display._open_tty("w")
         if tty:
             # Ensure every write hits the terminal before reading stdin -
             # Rich prompts don't end with newlines before input.
@@ -105,16 +102,19 @@ def _reload(shell: str) -> None:
     # we must redirect them back to /dev/tty before exec -- otherwise
     # the new login shell inherits the temp-file fd and runs non-interactively.
     if os.environ.get("KAGITCH_SHELL_WRAPPER"):
-        try:
-            tty_fd = os.open("/dev/tty", os.O_RDWR)
-            os.dup2(tty_fd, 1)
-            os.dup2(tty_fd, 2)
-            os.close(tty_fd)
-            sys.stdout = os.fdopen(1, "w")
-            sys.stderr = os.fdopen(2, "w")
-            con = RichConsole(file=sys.stdout, force_terminal=True, highlight=False)
-        except OSError:
+        if os.name == "nt":
             con = console
+        else:
+            try:
+                tty_fd = os.open("/dev/tty", os.O_RDWR)
+                os.dup2(tty_fd, 1)
+                os.dup2(tty_fd, 2)
+                os.close(tty_fd)
+                sys.stdout = os.fdopen(1, "w")
+                sys.stderr = os.fdopen(2, "w")
+                con = RichConsole(file=sys.stdout, force_terminal=True, highlight=False)
+            except OSError:
+                con = console
     else:
         con = console
 

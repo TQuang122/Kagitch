@@ -7,6 +7,7 @@ stays focused on command orchestration.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -46,26 +47,45 @@ def _fit_plain(text: str, width: int) -> str:
         return plain[:width]
     return plain[: width - 1] + "…"
 
+# ── Cross-platform tty helpers ──────────────────────────────────
+
+
+def _open_tty(mode: str = "w"):
+    """Return an open file to the controlling terminal.
+
+    Unix: /dev/tty   Windows: CON
+    Returns None when no terminal is available.
+    """
+    try:
+        if os.name == "nt":
+            return open("CON", mode)
+        return open("/dev/tty", mode)
+    except OSError:
+        return None
+
+
 # ── TTY status ──────────────────────────────────────────────────
 
 
 @contextmanager
 def _tty_status(msg: str):
-    """Rich live status via /dev/tty, for wrapper mode. Falls back silently."""
-    f = None
-    try:
-        f = open("/dev/tty", "w")
+    """Rich live status via controlling terminal, for wrapper mode.
+
+    Falls back silently (no terminal output) when the tty is unavailable.
+    """
+    f = _open_tty("w")
+    if f:
         tc = Console(file=f, force_terminal=True)
-        with tc.status(msg, spinner="dots"):
-            yield
-    except OSError:
-        yield
-    finally:
-        if f:
+        try:
+            with tc.status(msg, spinner="dots"):
+                yield
+        finally:
             try:
                 f.close()
             except Exception:
                 pass
+    else:
+        yield
 
 
 # ── Banner ──────────────────────────────────────────────────────
@@ -247,114 +267,101 @@ def _render_quota(hours_str: str) -> str:
     return f"[{C_OK}]{hours_str}[/]"
 
 
-# ── Terminal helpers ────────────────────────────────────────────
+# ── Shared select display helpers ───────────────────────────────
 
 
-def _terminal_select(
+def _build_select_lines(
     options: list[str],
-    default_index: int = 0,
-    *,
-    title: str = "",
-    footer: str = "",
-    subtexts: list[str] | None = None,
-    active_index: int | None = None,
-) -> int | None:
-    """Arrow-key navigable terminal selection list.
-
-    Shows options on stderr so it works in both normal and shell-wrapper mode.
-    Handles up/down/enter/escape/ctrl+c/q.
-
-    Args:
-        options: Display strings for each option.
-        default_index: Index to highlight initially (0-based).
-
-    Returns:
-        Selected index (0-based), or None if cancelled.
-    """
+    sel: int,
+    subtexts: list[str],
+    active_index: int | None,
+    title: str,
+    footer: str,
+) -> list[str]:
+    """Build colored ANSI display lines for an interactive select."""
     n = len(options)
-    if n == 0:
-        return None
-    if n == 1:
-        return 0
+    term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
+    card_width = min(80, term_width - 2)
+    inner_width = max(20, card_width - 2)
+    lines: list[str] = []
 
+    if title:
+        lines.append(f"\x1b[1;36m{title}\x1b[0m")
+        lines.append("")
+
+    for i, opt in enumerate(options):
+        plain = _fit_plain(opt, inner_width - 6)
+        badge = "ACTIVE" if active_index is not None and i == active_index else ""
+
+        if i == sel:
+            content_width = inner_width - 2
+            label = f"> {plain}"
+            badge_width = len(badge) + 1 if badge else 0
+            label_width = max(1, content_width - badge_width)
+            label = _fit_plain(label, label_width)
+            gap = max(1, content_width - len(label) - badge_width)
+            row = label + (" " * gap)
+            if badge:
+                row += f"\x1b[1;32m{badge}\x1b[0m"
+            tail_spaces = max(0, content_width - len(_strip_ansi(row)))
+
+            lines.append(f"\x1b[36m┌{'─' * inner_width}┐\x1b[0m")
+            lines.append(f"\x1b[36m│\x1b[0m {row}{' ' * tail_spaces} \x1b[36m│\x1b[0m")
+
+            sub = subtexts[i] if i < len(subtexts) else ""
+            if sub:
+                sub = _fit_plain(sub, content_width)
+                lines.append(f"\x1b[36m│\x1b[0m \x1b[2m{sub:<{content_width}}\x1b[0m \x1b[36m│\x1b[0m")
+
+            lines.append(f"\x1b[36m└{'─' * inner_width}┘\x1b[0m")
+        else:
+            number, sep, rest = plain.partition(". ")
+            if sep:
+                lines.append(f"  \x1b[2m{number}\x1b[0m  {rest}")
+            else:
+                lines.append(f"  {plain}")
+
+    if footer:
+        lines.append("")
+        lines.append(f"\x1b[2m{footer}\x1b[0m")
+
+    return lines
+
+
+def _write_select_lines(out, lines: list[str]) -> None:
+    for line in lines:
+        out.write(f"\r\x1b[K{line}\n")
+    out.flush()
+
+
+def _clear_select_lines(out, nlines: int) -> None:
+    out.write(f"\x1b[{nlines}A\x1b[J")
+    out.flush()
+
+
+# ── Terminal select (Unix) ──────────────────────────────────────
+
+
+def _terminal_select_unix(
+    options: list[str],
+    default_index: int,
+    title: str,
+    footer: str,
+    subtexts: list[str],
+    active_index: int | None,
+) -> int | None:
+    """Unix implementation using termios/tty for raw keyboard input."""
+    import termios
+    import tty
+
+    n = len(options)
     sel = max(0, min(default_index, n - 1))
-    subtexts = subtexts or [""] * n
-
-    # Open /dev/tty for interactive output when stderr is redirected
-    # (shell wrapper mode redirects stderr to a temp file)
     tty_out = None
     out = sys.stderr
     if not sys.stderr.isatty():
-        try:
-            tty_out = open("/dev/tty", "w")
-            out = tty_out
-        except OSError:
-            pass
-
-    def _lines() -> list[str]:
-        term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
-        card_width = min(80, term_width - 2)
-        inner_width = max(20, card_width - 2)
-        lines: list[str] = []
-
-        if title:
-            lines.append(f"\x1b[1;36m{title}\x1b[0m")
-            lines.append("")
-
-        for i, opt in enumerate(options):
-            plain = _fit_plain(opt, inner_width - 6)
-            badge = "ACTIVE" if active_index is not None and i == active_index else ""
-
-            if i == sel:
-                content_width = inner_width - 2
-                label = f"> {plain}"
-                badge_width = len(badge) + 1 if badge else 0
-                label_width = max(1, content_width - badge_width)
-                label = _fit_plain(label, label_width)
-                gap = max(1, content_width - len(label) - badge_width)
-                row = label + (" " * gap)
-                if badge:
-                    row += f"\x1b[1;32m{badge}\x1b[0m"
-                tail_spaces = max(0, content_width - len(_strip_ansi(row)))
-
-                lines.append(f"\x1b[36m┌{'─' * inner_width}┐\x1b[0m")
-                lines.append(f"\x1b[36m│\x1b[0m {row}{' ' * tail_spaces} \x1b[36m│\x1b[0m")
-
-                sub = subtexts[i] if i < len(subtexts) else ""
-                if sub:
-                    sub = _fit_plain(sub, content_width)
-                    lines.append(f"\x1b[36m│\x1b[0m \x1b[2m{sub:<{content_width}}\x1b[0m \x1b[36m│\x1b[0m")
-
-                lines.append(f"\x1b[36m└{'─' * inner_width}┘\x1b[0m")
-            else:
-                number, sep, rest = plain.partition(". ")
-                if sep:
-                    lines.append(f"  \x1b[2m{number}\x1b[0m  {rest}")
-                else:
-                    lines.append(f"  {plain}")
-
-        if footer:
-            lines.append("")
-            lines.append(f"\x1b[2m{footer}\x1b[0m")
-
-        return lines
-
-    def _draw(lines: list[str]) -> None:
-        for line in lines:
-            out.write(f"\r\x1b[K{line}\n")
-        out.flush()
-
-    def _cleanup(nlines: int) -> None:
-        out.write(f"\x1b[{nlines}A\x1b[J")
-        out.flush()
-
-    try:
-        import termios
-        import tty
-    except ImportError:
+        tty_out = _open_tty("w")
         if tty_out:
-            tty_out.close()
-        return default_index if 0 <= default_index < n else 0
+            out = tty_out
 
     if not sys.stdin.isatty():
         if tty_out:
@@ -367,8 +374,8 @@ def _terminal_select(
 
     try:
         tty.setraw(fd)
-        cur_lines = _lines()
-        _draw(cur_lines)
+        cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+        _write_select_lines(out, cur_lines)
 
         while True:
             ch = sys.stdin.read(1)
@@ -390,19 +397,129 @@ def _terminal_select(
             else:
                 continue
 
-            _cleanup(len(cur_lines))
-            cur_lines = _lines()
-            _draw(cur_lines)
+            _clear_select_lines(out, len(cur_lines))
+            cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+            _write_select_lines(out, cur_lines)
     except (KeyboardInterrupt, EOFError):
         sel = -1
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
         if cur_lines:
-            _cleanup(len(cur_lines))
+            _clear_select_lines(out, len(cur_lines))
         if tty_out:
             tty_out.close()
 
     return None if sel < 0 else sel
+
+
+# ── Terminal select (Windows) ────────────────────────────────────
+
+
+def _terminal_select_win(
+    options: list[str],
+    default_index: int,
+    title: str,
+    footer: str,
+    subtexts: list[str],
+    active_index: int | None,
+) -> int | None:
+    """Windows implementation using msvcrt for raw keyboard input."""
+    import msvcrt
+
+    n = len(options)
+    sel = max(0, min(default_index, n - 1))
+    tty_out = _open_tty("w")
+    out = tty_out or sys.stderr
+    cur_lines: list[str] = []
+
+    try:
+        cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+        _write_select_lines(out, cur_lines)
+
+        while True:
+            ch = msvcrt.getch()
+            if ch == b"\xe0":
+                ch2 = msvcrt.getch()
+                if ch2 == b"H":
+                    sel = (sel - 1) % n
+                elif ch2 == b"P":
+                    sel = (sel + 1) % n
+                else:
+                    continue
+            elif ch in (b"\r", b"\n"):
+                break
+            elif ch == b"\x03":
+                raise KeyboardInterrupt
+            elif ch in (b"q", b"Q"):
+                sel = -1
+                break
+            else:
+                continue
+
+            _clear_select_lines(out, len(cur_lines))
+            cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+            _write_select_lines(out, cur_lines)
+    except (KeyboardInterrupt, EOFError):
+        sel = -1
+    finally:
+        if cur_lines:
+            _clear_select_lines(out, len(cur_lines))
+        if tty_out:
+            try:
+                tty_out.close()
+            except Exception:
+                pass
+
+    return None if sel < 0 else sel
+
+
+# ── Terminal select (dispatcher) ────────────────────────────────
+
+
+def _terminal_select(
+    options: list[str],
+    default_index: int = 0,
+    *,
+    title: str = "",
+    footer: str = "",
+    subtexts: list[str] | None = None,
+    active_index: int | None = None,
+) -> int | None:
+    """Arrow-key navigable terminal selection list.
+
+    Dispatches to :func:`_terminal_select_unix` or :func:`_terminal_select_win`
+    depending on the platform.  Shows options on stderr for shell-wrapper mode.
+
+    Args:
+        options: Display strings for each option.
+        default_index: Index to highlight initially (0-based).
+
+    Returns:
+        Selected index (0-based), or ``None`` if cancelled.
+    """
+    subtexts = subtexts or [""] * len(options)
+    n = len(options)
+    if n == 0:
+        return None
+    if n == 1:
+        return 0
+
+    if os.name == "nt":
+        return _terminal_select_win(
+            options, default_index, title=title, footer=footer,
+            subtexts=subtexts, active_index=active_index,
+        )
+
+    try:
+        import termios
+        import tty
+    except ImportError:
+        return default_index if 0 <= default_index < n else 0
+
+    return _terminal_select_unix(
+        options, default_index, title=title, footer=footer,
+        subtexts=subtexts, active_index=active_index,
+    )
 
 
 def _select_account_interactive(config: dict) -> Account | None:
