@@ -684,6 +684,17 @@ class TestTerminalSelectWin:
                 )
         assert result == 1
 
+    def test_zero_prefix_arrow_down_then_enter(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\x00", b"P", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                result = display._terminal_select_win(
+                    ["A", "B", "C"], 0,
+                    title="", footer="", subtexts=[""] * 3, active_index=None,
+                )
+        assert result == 1
+
     def test_arrow_up_wraps_to_last(self):
         mock_msvcrt = MagicMock()
         mock_msvcrt.getch.side_effect = [b"\xe0", b"H", b"\r"]

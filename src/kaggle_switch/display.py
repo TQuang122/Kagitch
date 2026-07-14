@@ -438,7 +438,7 @@ def _terminal_select_win(
 
         while True:
             ch = msvcrt.getch()
-            if ch == b"\xe0":
+            if ch in (b"\x00", b"\xe0"):
                 ch2 = msvcrt.getch()
                 if ch2 == b"H":
                     sel = (sel - 1) % n
