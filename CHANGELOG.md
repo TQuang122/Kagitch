@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1] - 2026-07-14
+
+### Fixed
+- Windows terminal selectors now support both extended-key prefixes used by console environments for arrow keys.
+- `kagitch kernel logs` now keeps interactive account and kernel selection working in PowerShell and other shell wrappers.
+- Windows selection falls back safely when a controlling `CON` device is unavailable.
+
 ## [1.5.0] - 2026-07-12
 
 ### Added
