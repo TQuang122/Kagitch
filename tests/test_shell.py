@@ -29,6 +29,12 @@ class TestShellpath:
         assert "Set-Alias" in result
         assert "KAGGLE_CONFIG_DIR" in result
 
+
+    def test_powershell_function_bypasses_wrapper_for_kernel_logs(self):
+        powershell = sh.shellpath("powershell")
+        assert '$Arguments[1] -eq "logs"' in powershell
+        assert powershell.count('& "kagitch.exe" @Arguments') >= 2
+
     def test_unsupported_shell_raises(self):
         with pytest.raises(ValueError, match="Unsupported shell"):
             sh.shellpath("tcsh")
@@ -227,10 +233,7 @@ class TestDetectShellEdgeCases:
 class TestRcFileEdgeCases:
     def test_powershell_windows(self, monkeypatch):
         monkeypatch.setattr("sys.platform", "win32")
-        home = Path.home()
-        ps7 = home / "Documents" / "PowerShell" / "Microsoft.PowerShell_profile.ps1"
-        ps51 = home / "Documents" / "WindowsPowerShell" / "Microsoft.PowerShell_profile.ps1"
-        # When neither ps7 nor ps51 exist, should default to ps7
+        # When neither PowerShell profile exists, should default to PowerShell 7.
         rc = sh.rc_file_for_shell("powershell")
         assert rc is not None
         assert "PowerShell" in str(rc)

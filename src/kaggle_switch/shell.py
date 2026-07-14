@@ -132,6 +132,10 @@ function Invoke-Kagitch {
         & "kagitch.exe" @Arguments
         return
     }
+    if ($Arguments.Count -ge 2 -and $Arguments[0] -eq "kernel" -and $Arguments[1] -eq "logs") {
+        & "kagitch.exe" @Arguments
+        return
+    }
     $previousWrapper = $env:KAGITCH_SHELL_WRAPPER
     $env:KAGITCH_SHELL_WRAPPER = "1"
     try {

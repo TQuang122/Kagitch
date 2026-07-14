@@ -660,6 +660,26 @@ class TestTerminalSelectInteractive:
 # ── _terminal_select_win (Windows msvcrt) ──────────────────────
 
 
+
+    def test_windows_dispatcher_falls_back_when_con_unavailable(self):
+        with patch.object(display.os, "name", "nt"):
+            with patch.object(display, "_open_tty", return_value=None):
+                with patch.object(display, "_terminal_select_win") as mock_win:
+                    result = display._terminal_select(["A", "B", "C"], default_index=2)
+        assert result == 2
+        mock_win.assert_not_called()
+
+    def test_windows_dispatcher_uses_msvcrt_when_con_available(self):
+        mock_tty = MagicMock()
+        with patch.object(display.os, "name", "nt"):
+            with patch.object(display, "_open_tty", return_value=mock_tty):
+                with patch.object(display, "_terminal_select_win", return_value=1) as mock_win:
+                    result = display._terminal_select(["A", "B", "C"], default_index=0)
+        assert result == 1
+        mock_tty.close.assert_called_once()
+        mock_win.assert_called_once()
+
+
 class TestTerminalSelectWin:
 
     def test_enter_selects_default(self):
@@ -853,6 +873,33 @@ class TestSelectAccountInteractive:
             result = display._select_account_interactive(config)
 
         assert result is None
+
+
+    def test_windows_uses_terminal_select_even_when_stdin_is_pipe(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_DIR", tmp_path / ".config" / "kagitch"
+        )
+        monkeypatch.setattr(
+            "kaggle_switch.config.CONFIG_FILE",
+            tmp_path / ".config" / "kagitch" / "accounts.json",
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+        config = {
+            "accounts": {
+                "1": {"name": "alice", "config_dir": ".kaggle-alice"},
+                "2": {"name": "bob", "config_dir": ".kaggle-bob"},
+            }
+        }
+
+        with patch.object(display.os, "name", "nt"):
+            with patch("kaggle_switch.display._terminal_select", return_value=1) as mock_select:
+                result = display._select_account_interactive(config)
+
+        assert result is not None
+        assert result.name == "bob"
+        mock_select.assert_called_once()
 
     def test_fallback_input_eof(self, tmp_path, monkeypatch):
         """Fallback prompt raises EOFError → returns None."""

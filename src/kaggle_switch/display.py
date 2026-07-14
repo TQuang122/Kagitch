@@ -279,7 +279,6 @@ def _build_select_lines(
     footer: str,
 ) -> list[str]:
     """Build colored ANSI display lines for an interactive select."""
-    n = len(options)
     term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
     card_width = min(80, term_width - 2)
     inner_width = max(20, card_width - 2)
@@ -505,14 +504,21 @@ def _terminal_select(
         return 0
 
     if os.name == "nt":
+        tty_probe = _open_tty("w")
+        if tty_probe is None:
+            return default_index if 0 <= default_index < n else 0
+        try:
+            tty_probe.close()
+        except Exception:
+            pass
         return _terminal_select_win(
             options, default_index, title=title, footer=footer,
             subtexts=subtexts, active_index=active_index,
         )
 
     try:
-        import termios
-        import tty
+        import termios  # noqa: F401
+        import tty  # noqa: F401
     except ImportError:
         return default_index if 0 <= default_index < n else 0
 
@@ -552,7 +558,7 @@ def _select_account_interactive(config: dict) -> Account | None:
             active_idx = i
             break
 
-    if sys.stdin.isatty():
+    if sys.stdin.isatty() or os.name == "nt":
         idx = _terminal_select(
             select_options,
             default_index=active_idx,
