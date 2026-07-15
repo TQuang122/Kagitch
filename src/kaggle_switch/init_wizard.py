@@ -227,12 +227,11 @@ def _step_add_accounts(
             continue
         break
 
-    auth_choice = Prompt.ask(
-        "  Auth method",
-        choices=["oauth", "token", "legacy"],
-        default="oauth",
-        console=con,
-    )
+    from .commands.accounts import _select_auth_method
+    auth_choice = _select_auth_method(con)
+    if auth_choice is None:
+        con.print(_sub("Cancelled."))
+        return False
 
     name = name.strip()
 

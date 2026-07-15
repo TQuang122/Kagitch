@@ -7,7 +7,7 @@ import re
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -154,10 +154,74 @@ class TestCurrent:
 
 
 class TestLogin:
+    def test_select_auth_method_oauth_default(self, monkeypatch):
+        calls = {}
+
+        def select(options, **kwargs):
+            calls["options"] = options
+            calls["kwargs"] = kwargs
+            return 0
+
+        monkeypatch.setattr(accounts_cmd.display, "_terminal_select", select)
+        monkeypatch.setattr(accounts_cmd.sys.stdin, "isatty", lambda: True)
+
+        assert accounts_cmd._select_auth_method() == "oauth"
+        assert calls["options"] == [
+            "1. OAuth login",
+            "2. Access token",
+            "3. Legacy API key",
+            "4. Cancel",
+        ]
+        assert calls["kwargs"]["default_index"] == 0
+
+    @pytest.mark.parametrize(
+        ("selected", "expected"),
+        [(1, "token"), (2, "legacy"), (3, None)],
+    )
+    def test_select_auth_method_maps_selection(self, monkeypatch, selected, expected):
+        monkeypatch.setattr(accounts_cmd.display, "_terminal_select", lambda *a, **k: selected)
+        monkeypatch.setattr(accounts_cmd.sys.stdin, "isatty", lambda: True)
+
+        assert accounts_cmd._select_auth_method() == expected
+
     def test_login_missing_name(self, temp_env, capsys):
         rc, out = run_cli("login", capsys=capsys)
         assert rc == 1
         assert "Usage" in out
+
+    def test_add_cancel_does_not_create_account(self, temp_env, monkeypatch):
+        config = cfg.load_config()
+        monkeypatch.setattr(accounts_cmd, "_select_auth_method", lambda: None)
+
+        assert accounts_cmd.cmd_add(config, ["cancelled"]) == 1
+        assert cfg.find_account(config, "cancelled") is None
+
+    def test_add_token_uses_token_storage(self, temp_env, monkeypatch):
+        config = cfg.load_config()
+        monkeypatch.setattr(accounts_cmd, "_select_auth_method", lambda: "token")
+        monkeypatch.setattr(accounts_cmd.Prompt, "ask", lambda *args, **kwargs: "KGAT_test")
+
+        assert accounts_cmd.cmd_add(config, ["token-account"]) == 0
+        account = cfg.find_account(config, "token-account")
+        assert account is not None
+        assert account.auth_type == "token"
+
+    def test_add_legacy_path_bypasses_picker(self, temp_env, tmp_path, monkeypatch):
+        source = tmp_path / "kaggle.json"
+        source.write_text('{"username":"legacy-user","key":"secret"}')
+        picker = Mock(wraps=accounts_cmd._select_auth_method)
+        monkeypatch.setattr(accounts_cmd, "_select_auth_method", picker)
+        config = cfg.load_config()
+
+        assert accounts_cmd.cmd_add(config, ["legacy-account", str(source)]) == 0
+        assert picker.call_count == 0
+
+    def test_add_oauth_dispatches_to_oauth_handler(self, temp_env, monkeypatch):
+        config = cfg.load_config()
+        monkeypatch.setattr(accounts_cmd, "_select_auth_method", lambda: "oauth")
+        oauth = monkeypatch.setattr(accounts_cmd, "_add_via_oauth", lambda cfg, name: 0)
+
+        assert accounts_cmd.cmd_add(config, ["oauth-account"]) == 0
 
     def test_login_duplicate_name(self, temp_env, capsys):
         config = cfg.load_config()
@@ -213,6 +277,7 @@ class TestLogin:
 
         monkeypatch.setattr("kagglesdk.kaggle_client.KaggleClient", object)
         monkeypatch.setattr("kagglesdk.kaggle_oauth.KaggleOAuth", lambda client: MockOAuth())
+        monkeypatch.setattr(accounts_cmd, "_select_auth_method", lambda con=None: "oauth")
 
         kaggle_dir = tmp_path / ".kaggle"
         kaggle_dir.mkdir(parents=True, exist_ok=True)
@@ -234,6 +299,7 @@ class TestLogin:
     def test_login_oauth_failure(self, temp_env, capsys, monkeypatch):
         pytest.importorskip("kagglesdk")
         monkeypatch.setattr("kagglesdk.kaggle_client.KaggleClient", object)
+        monkeypatch.setattr(accounts_cmd, "_select_auth_method", lambda con=None: "oauth")
 
         class FailingOAuth:
             def authenticate(self, **kw):

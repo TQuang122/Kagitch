@@ -216,13 +216,14 @@ class TestStepAddAccounts:
 
     def test_empty_name_then_token_success(self, capcon):
         config = {"accounts": {}}
-        prompts = iter(["", "new", "token", "abc123"])
+        prompts = iter(["", "new", "abc123"])
 
         def ask_side(*args, **kwargs):
             return next(prompts)
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=ask_side), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="token"), \
              patch("kaggle_switch.config.add_account") as mock_add, \
              patch.object(iw, "save_config") as mock_save:
             result = iw._step_add_accounts(capcon, config)
@@ -233,13 +234,14 @@ class TestStepAddAccounts:
 
     def test_duplicate_name_then_token_success(self, capcon):
         config = {"accounts": {"1": {"name": "work", "config_dir": "work", "auth_type": "oauth"}}}
-        prompts = iter(["work", "personal", "token", "secret"])
+        prompts = iter(["work", "personal", "secret"])
 
         def ask_side(*args, **kwargs):
             return next(prompts)
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=ask_side), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="token"), \
              patch("kaggle_switch.config.add_account") as mock_add, \
              patch.object(iw, "save_config") as mock_save:
             result = iw._step_add_accounts(capcon, config)
@@ -250,10 +252,11 @@ class TestStepAddAccounts:
 
     def test_token_empty(self, capcon):
         config = {"accounts": {}}
-        prompts = iter(["new", "token", "   "])
+        prompts = iter(["new", "   "])
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="token"), \
              patch.object(iw, "save_config") as mock_save:
             result = iw._step_add_accounts(capcon, config)
 
@@ -262,10 +265,11 @@ class TestStepAddAccounts:
 
     def test_oauth_success(self, capcon):
         config = {"accounts": {}}
-        prompts = iter(["new", "oauth"])
+        prompts = iter(["new"])
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="oauth"), \
              patch("kaggle_switch.commands.accounts._add_via_oauth", return_value=1):
             result = iw._step_add_accounts(capcon, config)
 
@@ -273,10 +277,11 @@ class TestStepAddAccounts:
 
     def test_oauth_returns_false(self, capcon):
         config = {"accounts": {}}
-        prompts = iter(["new", "oauth"])
+        prompts = iter(["new"])
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="oauth"), \
              patch("kaggle_switch.commands.accounts._add_via_oauth", return_value=0):
             result = iw._step_add_accounts(capcon, config)
 
@@ -284,10 +289,11 @@ class TestStepAddAccounts:
 
     def test_oauth_exception(self, capcon):
         config = {"accounts": {}}
-        prompts = iter(["new", "oauth"])
+        prompts = iter(["new"])
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="oauth"), \
              patch("kaggle_switch.commands.accounts._add_via_oauth", side_effect=RuntimeError("boom")):
             result = iw._step_add_accounts(capcon, config)
 
@@ -295,10 +301,11 @@ class TestStepAddAccounts:
 
     def test_legacy_missing_file(self, capcon):
         config = {"accounts": {}}
-        prompts = iter(["new", "legacy", "/missing/file.json"])
+        prompts = iter(["new", "/missing/file.json"])
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
-             patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)):
+             patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="legacy"):
             result = iw._step_add_accounts(capcon, config)
 
         assert result is False
@@ -307,10 +314,11 @@ class TestStepAddAccounts:
         config = {"accounts": {}}
         legacy = tmp_path / "kaggle.json"
         legacy.write_text("{}")
-        prompts = iter(["new", "legacy", str(legacy)])
+        prompts = iter(["new", str(legacy)])
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="legacy"), \
              patch("kaggle_switch.config.add_account", side_effect=ValueError("bad creds")):
             result = iw._step_add_accounts(capcon, config)
 
@@ -320,10 +328,11 @@ class TestStepAddAccounts:
         config = {"accounts": {}}
         legacy = tmp_path / "kaggle.json"
         legacy.write_text("{}")
-        prompts = iter(["new", "legacy", str(legacy)])
+        prompts = iter(["new", str(legacy)])
 
         with patch.object(iw.Confirm, "ask", return_value=True), \
              patch.object(iw.Prompt, "ask", side_effect=lambda *a, **kw: next(prompts)), \
+             patch("kaggle_switch.commands.accounts._select_auth_method", return_value="legacy"), \
              patch("kaggle_switch.config.add_account") as mock_add:
             result = iw._step_add_accounts(capcon, config)
 

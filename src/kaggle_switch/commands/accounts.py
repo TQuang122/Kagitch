@@ -111,6 +111,42 @@ _SUCCESS_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+def _select_auth_method(con=None) -> str | None:
+    options = [
+        "1. OAuth login",
+        "2. Access token",
+        "3. Legacy API key",
+        "4. Cancel",
+    ]
+    if not sys.stdin.isatty() and os.name != "nt":
+        try:
+            choice = Prompt.ask(
+                "How do you want to authenticate?",
+                choices=["oauth", "token", "legacy", "cancel"],
+                default="oauth",
+                console=con or console,
+            )
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return None if choice == "cancel" else choice
+
+    idx = display._terminal_select(
+        options,
+        default_index=0,
+        title="How do you want to authenticate?",
+        footer="↑/↓ move • Enter select • q cancel",
+        subtexts=[
+            "Open Kaggle in your browser",
+            "Paste a KGAT access token",
+            "Import a kaggle.json file",
+            "Return without creating an account",
+        ],
+    )
+    if idx is None or idx == 3:
+        return None
+    return ("oauth", "token", "legacy")[idx]
+
+
 def _patch_oauth_success_page() -> None:
     """Replace kagglesdk's OAuth success page with the branded Kagitch page."""
     try:
@@ -331,7 +367,31 @@ def cmd_add(config: dict, args: list[str]) -> int:
             console.print(err(str(e)))
             return 1
 
-    return _add_via_oauth(config, name)
+    auth_method = _select_auth_method()
+    if auth_method is None:
+        console.print(info("Cancelled."))
+        return 1
+    if auth_method == "oauth":
+        return _add_via_oauth(config, name)
+    if auth_method == "token":
+        token = Prompt.ask("Access token", password=True)
+        if not token.strip():
+            console.print(err("Token cannot be empty."))
+            return 1
+        acc = add_account(config, name, token.strip(), auth_type="token")
+        save_config(config)
+        console.print(ok(f"Added account #{acc.number}: {acc.name}  (access token)"))
+        return 0
+
+    source = Prompt.ask("Path to kaggle.json")
+    try:
+        acc = add_account(config, name, source, auth_type="legacy")
+        save_config(config)
+        console.print(ok(f"Added account #{acc.number}: {acc.name}  (legacy API key)"))
+        return 0
+    except (ValueError, FileNotFoundError) as e:
+        console.print(err(str(e)))
+        return 1
 
 
 def cmd_remove(config: dict, args: list[str]) -> int:
