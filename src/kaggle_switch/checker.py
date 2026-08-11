@@ -17,28 +17,15 @@ from .config import Account, KAGGLE_DEFAULT, get_accounts, load_config
 _OAUTH_TOKEN_URL = "https://www.kaggle.com/api/v1/oauth2/token"
 
 
-# ── kagglesdk imports & TimeDeltaSerializer fix ────────────────
-# kagglesdk<=0.1.30 crashes when the API returns a whole-second
-# duration like "0s" (no decimal) — the split(".") produces a
-# single-element list.  Patch it at import time.
+# ── kagglesdk import guard ─────────────────────────────────────
+# kagglesdk >= 0.1.33 (bundled with kaggle CLI >= 2.2.4) fixed the
+# TimeDeltaSerializer whole-second duration crash upstream, so no
+# monkeypatch is needed.  Missing SDK degrades to the kaggle CLI
+# subprocess fallback in the quota check.
 _HAS_SDK = False
 try:
     from kagglesdk import KaggleClient
-    from kagglesdk.kaggle_object import TimeDeltaSerializer  # type: ignore[import-untyped]
 
-    _orig = TimeDeltaSerializer._from_dict_value
-
-    @staticmethod  # type: ignore[arg-type]
-    def _patched_from_dict_value(value: object) -> timedelta | None:
-        if value is None:
-            return None
-        v = str(value).rstrip("s")
-        parts = v.split(".")
-        secs = int(parts[0])
-        nanos = int(parts[1]) if len(parts) > 1 else 0
-        return timedelta(seconds=secs, microseconds=nanos // 1000)
-
-    TimeDeltaSerializer._from_dict_value = _patched_from_dict_value
     _HAS_SDK = True
 except Exception:
     pass  # kagglesdk not installed — quota check will fail naturally

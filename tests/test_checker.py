@@ -249,42 +249,6 @@ class TestTD:
         assert _td(None) == "n/a"
 
 
-class TestTimeDeltaSerializerPatch:
-    """Cover the patched _from_dict_value function body (lines 33-39)."""
-
-    @pytest.fixture(autouse=True)
-    def _skip_if_no_sdk(self):
-        pytest.importorskip("kagglesdk")
-
-    def test_none_value(self):
-        """Line 33-34: None input returns None."""
-        from kagglesdk.kaggle_object import TimeDeltaSerializer
-
-        result = TimeDeltaSerializer._from_dict_value(None)
-        assert result is None
-
-    def test_whole_seconds(self):
-        """Lines 35-37,39: '30s' returns timedelta(seconds=30)."""
-        from kagglesdk.kaggle_object import TimeDeltaSerializer
-
-        result = TimeDeltaSerializer._from_dict_value("30s")
-        assert result == timedelta(seconds=30)
-
-    def test_subsecond_precision(self):
-        """Lines 35-39: '30.5s' parses nanos to microseconds (5//1000=0)."""
-        from kagglesdk.kaggle_object import TimeDeltaSerializer
-
-        result = TimeDeltaSerializer._from_dict_value("30.5s")
-        assert result == timedelta(seconds=30)
-
-    def test_large_nanos_value(self):
-        """Lines 35-39: nanos>1000 converts to microseconds correctly."""
-        from kagglesdk.kaggle_object import TimeDeltaSerializer
-
-        result = TimeDeltaSerializer._from_dict_value("30.500000000s")
-        assert result == timedelta(seconds=30, microseconds=500000)
-
-
 class TestSwapCreds:
     def test_already_in_place(self, tmp_path, monkeypatch):
         """_swap_creds no-ops when source and dest resolve to same file
@@ -548,7 +512,7 @@ class TestCheckAllAccounts:
 
 
 class TestCheckerModuleImport:
-    """Cover kagglesdk import failure path (lines 43-44)."""
+    """Cover the kagglesdk import guard in checker.py."""
 
     def test_hassdk_defined(self):
         assert hasattr(checker, "_HAS_SDK")
