@@ -306,6 +306,46 @@ def _check_quota_sdk(
                 backup.unlink()
 
 
+def _parse_quota_json(stdout: str, result: CheckResult) -> bool:
+    """Parse `kaggle quota --format json` output (CLI >= 2.2.3).
+
+    Returns True when at least one quota row was extracted.
+    """
+    try:
+        rows = json.loads(stdout)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("resource") == "GPU" and row.get("remaining"):
+            result.gpu_remaining = row["remaining"]
+        elif row.get("resource") == "TPU" and row.get("remaining"):
+            result.tpu_remaining = row["remaining"]
+        if not result.quota_refresh and row.get("refreshAt"):
+            result.quota_refresh = row["refreshAt"]
+    return bool(result.gpu_remaining or result.tpu_remaining)
+
+
+def _parse_quota_text(stdout: str, result: CheckResult) -> None:
+    """Parse plain `kaggle quota` table output (CLI < 2.2.3)."""
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line.startswith("GPU") or line.startswith("TPU"):
+            parts = line.split()
+            if len(parts) >= 3:
+                resource = parts[0]
+                remaining = parts[2]
+                if resource == "GPU":
+                    result.gpu_remaining = remaining
+                elif resource == "TPU":
+                    result.tpu_remaining = remaining
+            if len(parts) >= 5 and not result.quota_refresh:
+                result.quota_refresh = parts[4]
+
+
 def check_account(acc: Account) -> CheckResult:
     """Run full check on a single account."""
     result = CheckResult(number=acc.number, name=acc.name, config_path=acc.path)
@@ -381,27 +421,21 @@ def check_account(acc: Account) -> CheckResult:
     ) = _check_quota_sdk(env, acc)
 
     if not result.quota_ok:
-        # Fall back to kaggle CLI subprocess
+        # Fall back to kaggle CLI subprocess.  Prefer `--format json`
+        # (CLI >= 2.2.3); older CLIs only print the plain table.
         try:
-            cp = _run_with_creds(["quota"], env, acc)
-            if cp.returncode == 0:
-                for line in cp.stdout.splitlines():
-                    line = line.strip()
-                    if line.startswith("GPU") or line.startswith("TPU"):
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            resource = parts[0]
-                            remaining = parts[2]
-                            if resource == "GPU":
-                                result.gpu_remaining = remaining
-                            elif resource == "TPU":
-                                result.tpu_remaining = remaining
-                        if len(parts) >= 5 and not result.quota_refresh:
-                            result.quota_refresh = parts[4]
+            cp = _run_with_creds(["quota", "--format", "json"], env, acc)
+            if cp.returncode == 0 and _parse_quota_json(cp.stdout, result):
                 result.quota_ok = True
                 result.quota_error = ""
             else:
-                result.quota_error = cp.stderr[:200] if cp.stderr else f"exit code {cp.returncode}"
+                cp = _run_with_creds(["quota"], env, acc)
+                if cp.returncode == 0:
+                    _parse_quota_text(cp.stdout, result)
+                    result.quota_ok = True
+                    result.quota_error = ""
+                else:
+                    result.quota_error = cp.stderr[:200] if cp.stderr else f"exit code {cp.returncode}"
         except (subprocess.TimeoutExpired, FileNotFoundError) as e:
             result.quota_error = str(e)
 

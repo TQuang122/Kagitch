@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -497,16 +498,97 @@ class TestRemove:
         config = cfg.load_config()
         assert "1" in config["accounts"]
 
-    def test_remove_confirmed(self, temp_env, capsys):
+    def test_remove_confirmed(self, temp_env, capsys, monkeypatch):
         config = cfg.load_config()
         config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
         cfg.save_config(config)
+        # No kaggle CLI on PATH — revoke short-circuits without subprocess
+        monkeypatch.setattr("kaggle_switch.commands.accounts.shutil.which", lambda x: None)
 
         with patch("kaggle_switch.commands.accounts.Confirm.ask", return_value=True):
             rc, out = run_cli("remove", "1", capsys=capsys)
 
         assert rc == 0
         assert "Removed account #1" in out
+        config = cfg.load_config()
+        assert "1" not in config["accounts"]
+
+    def test_remove_revokes_token(self, temp_env, capsys, monkeypatch):
+        """remove revokes the server-side token before deleting local creds."""
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.accounts.shutil.which",
+            lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None,
+        )
+        revoked = {}
+
+        def fake_run_with_creds(cmd, env, acc):
+            revoked["cmd"] = cmd
+            return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.accounts._run_with_creds", fake_run_with_creds
+        )
+
+        with patch("kaggle_switch.commands.accounts.Confirm.ask", return_value=True):
+            rc, out = run_cli("remove", "1", capsys=capsys)
+
+        assert rc == 0
+        assert revoked.get("cmd") == ["auth", "revoke"]
+        assert "Could not revoke" not in out
+        config = cfg.load_config()
+        assert "1" not in config["accounts"]
+
+    def test_remove_revoke_fails_still_removes(self, temp_env, capsys, monkeypatch):
+        """revoke failure warns but does not block account removal."""
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.accounts.shutil.which",
+            lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None,
+        )
+        monkeypatch.setattr(
+            "kaggle_switch.commands.accounts._run_with_creds",
+            lambda cmd, env, acc: subprocess.CompletedProcess(args=cmd, returncode=2),
+        )
+
+        with patch("kaggle_switch.commands.accounts.Confirm.ask", return_value=True):
+            rc, out = run_cli("remove", "1", capsys=capsys)
+
+        assert rc == 0
+        assert "Could not revoke token server-side" in out
+        config = cfg.load_config()
+        assert "1" not in config["accounts"]
+
+
+    def test_remove_revoke_timeout_still_removes(self, temp_env, capsys, monkeypatch):
+        """revoke timeout warns but does not block account removal."""
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.accounts.shutil.which",
+            lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None,
+        )
+
+        def raise_timeout(cmd, env, acc):
+            raise subprocess.TimeoutExpired(cmd="kaggle auth revoke", timeout=15)
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.accounts._run_with_creds", raise_timeout
+        )
+
+        with patch("kaggle_switch.commands.accounts.Confirm.ask", return_value=True):
+            rc, out = run_cli("remove", "1", capsys=capsys)
+
+        assert rc == 0
+        assert "Could not revoke token server-side" in out
         config = cfg.load_config()
         assert "1" not in config["accounts"]
 
@@ -773,6 +855,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
 
         config = cfg.load_config()
         config["accounts"] = {
@@ -818,6 +901,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
 
         config = cfg.load_config()
         config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
@@ -851,6 +935,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
 
         config = cfg.load_config()
@@ -876,6 +961,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
 
         config = cfg.load_config()
@@ -907,6 +993,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
         monkeypatch.setenv("KAGITCH_SHELL_WRAPPER", "1")
 
@@ -936,6 +1023,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
 
         config = cfg.load_config()
@@ -963,6 +1051,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
 
         config = cfg.load_config()
@@ -989,6 +1078,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
 
         config = cfg.load_config()
@@ -1010,6 +1100,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         monkeypatch.delenv("KAGGLE_CONFIG_DIR", raising=False)
 
         config = cfg.load_config()
@@ -1031,6 +1122,7 @@ class TestDoctor:
         monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "powershell")
         monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: ps_profile)
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
 
         config = cfg.load_config()
         config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
@@ -1075,8 +1167,95 @@ class TestDoctor:
     def test_doctor_kaggle_no_active(self, temp_env, capsys, monkeypatch):
         """doctor shows 'no active account' when kaggle installed but no account active."""
         monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 4))
         rc, out = run_cli("doctor", capsys=capsys)
         assert "no active account" in out
+
+    def test_doctor_version_warn_old(self, temp_env, capsys, monkeypatch):
+        """doctor warns when kaggle CLI is older than 2.2.4."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 2))
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 0
+        assert "upgrade to >= 2.2.4" in out
+
+    def test_doctor_version_undetermined(self, temp_env, capsys, monkeypatch):
+        """doctor errors when kaggle CLI version cannot be determined."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: None)
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 1
+        assert "could not determine" in out
+
+    def test_doctor_version_too_old(self, temp_env, capsys, monkeypatch):
+        """doctor errors when kaggle CLI predates the quota command."""
+        tmp_path, _ = temp_env
+        rc_file = tmp_path / ".zshrc"
+        rc_file.write_text('eval "$(kagitch shellpath zsh)"\n')
+        monkeypatch.setattr("kaggle_switch.commands.doctor.detect_shell", lambda: "zsh")
+        monkeypatch.setattr("kaggle_switch.commands.doctor.rc_file_for_shell", lambda s: rc_file)
+        monkeypatch.setattr("shutil.which", lambda x: "/usr/local/bin/kaggle" if x == "kaggle" else None)
+        monkeypatch.setattr("kaggle_switch.commands.doctor._kaggle_version", lambda: (2, 2, 0))
+        kaggle_dir = tmp_path / ".kaggle"
+        kaggle_dir.mkdir(exist_ok=True)
+
+        rc, out = run_cli("doctor", capsys=capsys)
+        assert rc == 1
+        assert "quota needs >= 2.2.1" in out
+
+
+class TestKaggleVersion:
+    def test_parses_version(self, monkeypatch):
+        from kaggle_switch.commands.doctor import _kaggle_version
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.doctor.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="Kaggle CLI 2.2.4"),
+        )
+        assert _kaggle_version() == (2, 2, 4)
+
+    def test_nonzero_exit_returns_none(self, monkeypatch):
+        from kaggle_switch.commands.doctor import _kaggle_version
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.doctor.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 2, stdout=""),
+        )
+        assert _kaggle_version() is None
+
+    def test_unparsable_output_returns_none(self, monkeypatch):
+        from kaggle_switch.commands.doctor import _kaggle_version
+
+        monkeypatch.setattr(
+            "kaggle_switch.commands.doctor.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="garbage"),
+        )
+        assert _kaggle_version() is None
+
+    def test_timeout_returns_none(self, monkeypatch):
+        from kaggle_switch.commands.doctor import _kaggle_version
+
+        def raise_timeout(*a, **kw):
+            raise subprocess.TimeoutExpired(cmd="kaggle --version", timeout=10)
+
+        monkeypatch.setattr("kaggle_switch.commands.doctor.subprocess.run", raise_timeout)
+        assert _kaggle_version() is None
 
 
 class TestCurrentQuota:

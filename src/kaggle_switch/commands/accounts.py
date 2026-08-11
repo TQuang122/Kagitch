@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import urllib.parse
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 from rich.prompt import Confirm, Prompt
 
 from .. import display
+from ..checker import _build_env, _run_with_creds
 from ..config import (
     _next_account_number,
     add_account,
@@ -394,6 +396,21 @@ def cmd_add(config: dict, args: list[str]) -> int:
         return 1
 
 
+def _revoke_oauth_token(acc) -> bool:
+    """Best-effort revoke of the account's Kaggle token on the server.
+
+    Runs `kaggle auth revoke` (CLI >= 2.2.4) with the account's
+    credentials active.  Failure never blocks account removal.
+    """
+    if shutil.which("kaggle") is None:
+        return False
+    try:
+        cp = _run_with_creds(["auth", "revoke"], _build_env(acc), acc)
+        return cp.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def cmd_remove(config: dict, args: list[str]) -> int:
     if not args:
         console.print(err("Usage: kagitch remove <N|name>"))
@@ -414,6 +431,11 @@ def cmd_remove(config: dict, args: list[str]) -> int:
         if not Confirm.ask("Delete this account?", default=False):
             console.print(f"  [{C_DIM}]Cancelled.[/]")
             return 0
+        if not _revoke_oauth_token(acc):
+            console.print(
+                f"  [{C_WARN}]Could not revoke token server-side "
+                f"(kaggle CLI >= 2.2.4 required). Local credentials will still be deleted.[/]"
+            )
         remove_account(config, args[0])
         console.print()
         console.print(ok(f"Removed account #{acc.number}: [bold]{acc.name}[/]"))

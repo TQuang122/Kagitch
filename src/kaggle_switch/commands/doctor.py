@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import subprocess
 from pathlib import Path
 
 from rich.text import Text
@@ -25,12 +27,36 @@ from ..style import (
 )
 
 
+def _kaggle_version() -> tuple[int, int, int] | None:
+    """Return the installed kaggle CLI version as (major, minor, patch)."""
+    try:
+        cp = subprocess.run(
+            ["kaggle", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if cp.returncode != 0:
+            return None
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", cp.stdout)
+        if not m:
+            return None
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+
+def _fmt_version(v: tuple[int, int, int]) -> str:
+    return ".".join(str(p) for p in v)
+
+
 def cmd_doctor(config: dict) -> int:
     from ..checker import check_account
 
     shell = detect_shell()
     rc = rc_file_for_shell(shell)
     kaggle_path = shutil.which("kaggle")
+    kaggle_version = _kaggle_version() if kaggle_path else None
     accounts = get_accounts(config)
     active_num = current_active(config)
     rc_ok = False
@@ -43,12 +69,17 @@ def cmd_doctor(config: dict) -> int:
     creds = config_dir / "credentials.json"
     active_acc = find_account(config, str(active_num)) if active_num else None
 
+    version_ok = True
+    if kaggle_path:
+        version_ok = kaggle_version is not None and kaggle_version >= (2, 2, 1)
+
     check_results = [
         bool(kaggle_path),
         rc_ok,
         config_dir.is_dir() and os.access(config_dir, os.R_OK),
         not creds.exists() or os.access(creds, os.R_OK),
         active_acc is not None or active_num is None,
+        version_ok,
     ]
     passed_checks = sum(1 for result in check_results if result)
     total_checks = len(check_results)
@@ -71,6 +102,21 @@ def cmd_doctor(config: dict) -> int:
     else:
         exit_code = 1
         _line("\u2717", C_ERROR, "Kaggle CLI", "not found \u2014 pip install kaggle")
+
+    # 1b — Kaggle CLI version
+    if kaggle_path:
+        if kaggle_version is None:
+            exit_code = 1
+            _line("\u2717", C_ERROR, "Kaggle version", "could not determine")
+        elif kaggle_version >= (2, 2, 4):
+            _line("\u2713", C_OK, "Kaggle version", _fmt_version(kaggle_version))
+        elif kaggle_version >= (2, 2, 1):
+            _line("\u26a0", C_WARN, "Kaggle version",
+                  f"{_fmt_version(kaggle_version)} \u2014 upgrade to >= 2.2.4")
+        else:
+            exit_code = 1
+            _line("\u2717", C_ERROR, "Kaggle version",
+                  f"{_fmt_version(kaggle_version)} \u2014 quota needs >= 2.2.1")
 
     # 2 — Shell wrapper installed
     if rc_ok:
@@ -165,6 +211,8 @@ def cmd_doctor(config: dict) -> int:
         recs.append(f"{reload_cmd}   reload wrapper in current shell")
     if not kaggle_path:
         recs.append(f"[bold]pip install kaggle[/]   install Kaggle CLI")
+    elif kaggle_version is None or kaggle_version < (2, 2, 4):
+        recs.append(f"[bold]pip install -U kaggle[/]   upgrade Kaggle CLI to >= 2.2.4")
     recs.append(f"[bold]kagitch check[/]       detailed quota check for all accounts")
 
     body.append(f"  Recommendations:\n", style="bold")

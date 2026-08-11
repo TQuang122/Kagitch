@@ -11,6 +11,8 @@ import kaggle_switch.checker as checker
 from kaggle_switch.checker import (
     _build_env,
     _check_quota_sdk,
+    _parse_quota_json,
+    _parse_quota_text,
     _patch_creds_expiry,
     _refresh_oauth_token,
     _require_kaggle,
@@ -44,11 +46,12 @@ def fake_subprocess_quota(**kwargs):
     return subprocess.CompletedProcess(
         args=[],
         returncode=0,
-        stdout="""Competitions    Kernels    Datasets     Disk     GPU        TPU
-...              ...        ...          ...     25.87h    20.00h
-GPU       25.87h  4.13h      30.00h  ...
-TPU       20.00h  0.00h      20.00h  ...
-"""
+        stdout=json.dumps([
+            {"resource": "GPU", "used": "25.87h", "remaining": "4.13h",
+             "total": "30.00h", "refreshAt": "2026-06-01T00:00:00+00:00"},
+            {"resource": "TPU", "used": "20.00h", "remaining": "0.00h",
+             "total": "20.00h", "refreshAt": "2026-06-01T00:00:00+00:00"},
+        ]),
     )
 
 
@@ -433,7 +436,7 @@ class TestCheckAccount:
         assert result.file_ok is True
 
     def test_quota_fallback_stderr(self, tmp_path, monkeypatch):
-        """check_account captures stderr from failed quota fallback (line 417)."""
+        """check_account captures stderr from failed quota fallback."""
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         acc_path = tmp_path / ".kaggle-quotaerr"
         acc_path.mkdir(parents=True)
@@ -445,9 +448,12 @@ class TestCheckAccount:
         with patch("kaggle_switch.checker._run_with_creds") as mock_run, patch(
             "kaggle_switch.checker._check_quota_sdk"
         ) as mock_sdk:
-            # Config view succeeds, quota CLI returns non-zero with stderr
+            # Config view succeeds, both quota attempts return non-zero
             mock_run.side_effect = [
                 fake_subprocess_config_view(),
+                subprocess.CompletedProcess(
+                    args=[], returncode=1, stderr="too many requests"
+                ),
                 subprocess.CompletedProcess(
                     args=[], returncode=1, stderr="too many requests"
                 ),
@@ -744,9 +750,9 @@ class TestRunKaggle:
 
         mock = MagicMock(return_value=subprocess.CompletedProcess([], 0))
         monkeypatch.setattr(subprocess, "run", mock)
-        result = _run_kaggle(["quota"], {"ENV": "val"})
+        result = _run_kaggle(["quota", "--format", "json"], {"ENV": "val"})
         mock.assert_called_once_with(
-            ["kaggle", "quota"],
+            ["kaggle", "quota", "--format", "json"],
             capture_output=True,
             text=True,
             timeout=15,
@@ -774,6 +780,41 @@ class TestRunKaggle:
         result = _run_kaggle(["quota"], {"ENV": "val"})
         assert mock.call_args[1]["creationflags"] == 0x08000000
         assert result.returncode == 0
+
+
+class TestParseQuota:
+    def test_parse_quota_json_valid(self):
+        result = CheckResult(number="1", name="a", config_path=Path("/tmp"))
+        ok = _parse_quota_json(
+            json.dumps([
+                {"resource": "GPU", "remaining": "4.13h",
+                 "refreshAt": "2026-06-01T00:00:00+00:00"},
+                {"resource": "TPU", "remaining": "0.00h"},
+            ]),
+            result,
+        )
+        assert ok is True
+        assert result.gpu_remaining == "4.13h"
+        assert result.tpu_remaining == "0.00h"
+        assert result.quota_refresh.startswith("2026-06-01")
+
+    def test_parse_quota_json_invalid(self):
+        result = CheckResult(number="1", name="a", config_path=Path("/tmp"))
+        assert _parse_quota_json("not json", result) is False
+        assert _parse_quota_json("{}", result) is False
+        assert _parse_quota_json('[{"resource": "GPU"}, "junk"]', result) is False
+        assert result.gpu_remaining == ""
+
+    def test_parse_quota_text(self):
+        result = CheckResult(number="1", name="a", config_path=Path("/tmp"))
+        _parse_quota_text(
+            "GPU       25.87h  4.13h      30.00h  refresh\n"
+            "TPU       20.00h  0.00h      20.00h  refresh\n",
+            result,
+        )
+        assert result.gpu_remaining == "4.13h"
+        assert result.tpu_remaining == "0.00h"
+        assert result.quota_refresh == "refresh"
 
 
 class TestCheckAccountExtended:
