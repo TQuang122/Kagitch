@@ -11,7 +11,13 @@ from .accounts import (
     cmd_rename,
 )
 from .doctor import cmd_check, cmd_doctor
-from .kernel import _kernel_init_help, cmd_kernel_init, cmd_kernel_logs, cmd_patch
+from .kernel import (
+    _kernel_init_help,
+    cmd_kernel_init,
+    cmd_kernel_logs,
+    cmd_kernel_output,
+    cmd_patch,
+)
 from .setup import cmd_completions, cmd_init, cmd_shellpath, cmd_update
 from .switch import cmd_switch, cmd_switch_prompt
 
@@ -26,6 +32,7 @@ __all__ = [
     "cmd_init",
     "cmd_kernel_init",
     "cmd_kernel_logs",
+    "cmd_kernel_output",
     "cmd_list",
     "cmd_list_accounts",
     "cmd_patch",

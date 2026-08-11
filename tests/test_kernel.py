@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -1061,3 +1064,335 @@ class TestBrowseKernelLogs:
 @pytest.fixture
 def config_empty():
     return {"accounts": {}}
+
+
+# ── kagitch kernel output ───────────────────────────────────────
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(out: str) -> str:
+    return _ANSI_RE.sub("", out)
+
+
+class TestParseKernelOutputArgs:
+    def test_defaults(self):
+        args = kn._parse_kernel_output_args([])
+        assert args is not None
+        assert args["ref"] is None
+        assert args["all"] is False
+        assert args["force"] is False
+        assert args["path"] is None
+        assert args["help"] is False
+
+    def test_parses_flags(self):
+        args = kn._parse_kernel_output_args(["-a", "-f", "-p", "out", "owner/slug"])
+        assert args["ref"] == "owner/slug"
+        assert args["all"] is True
+        assert args["force"] is True
+        assert args["path"] == "out"
+
+    def test_help_flag(self):
+        args = kn._parse_kernel_output_args(["--help"])
+        assert args["help"] is True
+
+    def test_unknown_flag_returns_none(self):
+        assert kn._parse_kernel_output_args(["-z"]) is None
+
+    def test_missing_path_value_returns_none(self):
+        assert kn._parse_kernel_output_args(["-p"]) is None
+
+    def test_too_many_positionals_returns_none(self):
+        assert kn._parse_kernel_output_args(["a/b", "c/d"]) is None
+
+
+class _TtyStatus:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *a):
+        return False
+
+
+def _tty_status_factory(msg=""):
+    return _TtyStatus()
+
+
+class TestCmdKernelOutput:
+    def test_help(self, capsys):
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["--help"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "kagitch kernel output" in out
+
+    def test_bad_args_usage(self, capsys):
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["-z"])
+        assert rc == 1
+        assert "Usage: kagitch kernel output" in capsys.readouterr().out
+
+    def test_ref_without_owner_returns_1(self, capsys, monkeypatch):
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["noslash"])
+        assert rc == 1
+
+    def test_auto_switch_fail_returns_1(self, capsys, monkeypatch):
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: False)
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+        assert rc == 1
+
+    def test_all_mode_subprocess(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        called = {}
+
+        def fake_run(cmd, **kwargs):
+            called["cmd"] = cmd
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr("kaggle_switch.commands.kernel.subprocess.run", fake_run)
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug", "-a", "-p", "out", "-f"])
+        assert rc == 0
+        assert called["cmd"] == [
+            "kaggle", "kernels", "output", "download", "owner/slug",
+            "-p", "out", "-o",
+        ]
+
+    def test_all_mode_nonzero_rc(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.subprocess.run",
+            lambda cmd, **kw: SimpleNamespace(returncode=2),
+        )
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug", "-a"])
+        assert rc == 2
+
+    def test_all_mode_missing_cli(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.subprocess.run",
+            lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()),
+        )
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug", "-a"])
+        assert rc == 1
+        assert "kaggle CLI not found" in capsys.readouterr().out
+
+    def test_select_mode_success(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        files = [
+            OutputFile(path="a.csv", url="http://u/a"),
+            OutputFile(path="data/b.csv", url="http://u/b"),
+            OutputFile(path="slug.log", url=None, log_text="log"),
+        ]
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: files)
+
+        def fake_checkbox(*a, **kw):
+            return SimpleNamespace(ask=lambda: ["a.csv", "[dir] data/", "[log] slug.log"])
+
+        monkeypatch.setattr("questionary.checkbox", fake_checkbox)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / f2.path for f2 in f], 0))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Downloaded 3 file(s)" in _plain(out)
+        assert (tmp_path / "slug-output").is_dir()
+
+    def test_select_mode_skip_warning(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")])
+
+        def fake_checkbox(*a, **kw):
+            return SimpleNamespace(ask=lambda: ["a.csv"])
+
+        monkeypatch.setattr("questionary.checkbox", fake_checkbox)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / "a.csv"], 1))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 0
+        assert "Skipped 1" in _plain(capsys.readouterr().out)
+
+    def test_empty_files_returns_1(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [])
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+        assert rc == 1
+        assert "No output files" in capsys.readouterr().out
+
+    def test_listing_error_returns_1(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        from kaggle_switch.kernel_outputs import KernelOutputError
+
+        def boom(o, s, **kw):
+            raise KernelOutputError("nope")
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files", boom)
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+        assert rc == 1
+        assert "nope" in capsys.readouterr().out
+
+    def test_selection_cancel_returns_1(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")])
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: None))
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+        assert rc == 1
+        assert "Cancelled" in capsys.readouterr().out
+
+    def test_download_error_returns_1(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        from kaggle_switch.kernel_outputs import KernelOutputError, OutputFile
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")])
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["a.csv"]))
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs.download_files",
+            lambda f, t, **kw: (_ for _ in ()).throw(KernelOutputError("expired")),
+        )
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+        assert rc == 1
+        assert "expired" in capsys.readouterr().out
+
+
+def _patch_browse(monkeypatch, tmp_path, kernels, select_result):
+    monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+    monkeypatch.setattr("kaggle_switch.commands.kernel._apply_account_env", lambda a: None)
+    monkeypatch.setattr("kaggle_switch.commands.kernel._active_username_from_account",
+                        lambda a: a.name)
+    monkeypatch.setattr("kaggle_switch.logs_viewer.list_kernels", lambda owner: kernels)
+    monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select",
+                        lambda options: select_result)
+
+
+class TestBrowseKernelOutput:
+
+    def test_account_cancel_returns_1(self, monkeypatch):
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
+                            lambda c: None)
+        assert kn.cmd_kernel_output({"accounts": {}}, []) == 1
+
+    def test_no_kernels_returns_1(self, monkeypatch, tmp_path):
+        acc = Account(number=1, name="testacc", config_dir="testacc")
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
+                            lambda c: acc)
+        _patch_browse(monkeypatch, tmp_path, [], 0)
+        assert kn.cmd_kernel_output({"accounts": {}}, []) == 1
+
+    def test_kernel_cancel_returns_1(self, monkeypatch, tmp_path):
+        acc = Account(number=1, name="testacc", config_dir="testacc")
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
+                            lambda c: acc)
+        _patch_browse(monkeypatch, tmp_path, [MockKernelInfo(ref="t/k1")], None)
+        assert kn.cmd_kernel_output({"accounts": {}}, []) == 1
+
+    def test_browse_full_flow(self, capsys, monkeypatch, tmp_path):
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        acc = Account(number=1, name="testacc", config_dir="testacc")
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
+                            lambda c: acc)
+        _patch_browse(monkeypatch, tmp_path, [MockKernelInfo(ref="testacc/k1")], 0)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")])
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["a.csv"]))
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / "a.csv"], 0))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, [])
+
+        assert rc == 0
+        assert "Downloaded 1 file(s)" in _plain(capsys.readouterr().out)
+
+
+class TestKernelOutputCoverage:
+    def test_all_mode_timeout(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.subprocess.run",
+            lambda cmd, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired(cmd="kaggle", timeout=600)),
+        )
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug", "-a"])
+        assert rc == 1
+        assert "timed out" in capsys.readouterr().out
+
+    def test_browse_tty_path(self, capsys, monkeypatch, tmp_path):
+        """Cover the stderr-isatty table render branch in _pick_kernel_interactive."""
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        acc = Account(number=1, name="testacc", config_dir="testacc")
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.display._select_account_interactive", lambda c: acc
+        )
+        monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+        _patch_browse(
+            monkeypatch, tmp_path, [MockKernelInfo(ref="testacc/k1", status="RUNNING")], 0
+        )
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")])
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["a.csv"]))
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / "a.csv"], 0))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, [])
+
+        assert rc == 0
+
+    def test_browse_open_tty_path(self, capsys, monkeypatch, tmp_path):
+        """Cover the _open_tty fallback render branch with unknown status color."""
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        acc = Account(number=1, name="testacc", config_dir="testacc")
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.display._select_account_interactive", lambda c: acc
+        )
+        tty = MagicMock(__enter__=lambda s: s, __exit__=lambda *a: False)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._open_tty", lambda mode: tty)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.Console", lambda **kw: MagicMock())
+        _patch_browse(
+            monkeypatch, tmp_path, [MockKernelInfo(ref="testacc/k1", status="QUEUED")], 0
+        )
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")])
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["a.csv"]))
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / "a.csv"], 0))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, [])
+
+        assert rc == 0

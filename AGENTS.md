@@ -43,7 +43,7 @@ Kagitch — a CLI tool for managing multiple Kaggle accounts. Switch between acc
 ### Common Patterns & Gotchas
 - All terminal output uses `rich` (Console, Table, Panel) — never bare `print()`
 - `kaggle` CLI is invoked via `subprocess.run()`, NOT the `kagglesdk` directly (except for token refresh)
-- `kagglesdk` has a known `TimeDeltaSerializer` bug for whole-second durations — patched in `checker.py`
+- `kagglesdk` >= 0.1.33 fixed the `TimeDeltaSerializer` whole-second bug upstream — `checker.py` has an import guard, not a patch
 - Shell integration is the trickiest part: uses `eval`-line injection for env vars; Windows PowerShell uses `$PROFILE`
 - Account switching sets `KAGGLE_CONFIG_DIR` to `~/.kaggle-<name>/` — this makes `kaggle` CLI use the right credentials
 - Config directory permissions matter: `accounts.json` stores account metadata (names, paths), not secrets

@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `kagitch kernel output [owner/slug]` — download kernel outputs. Interactive mode lists output files and lets you multi-select files or whole directories (via `questionary.checkbox`); `-a/--all` downloads everything through the kaggle CLI. Supports `-p/--path` for the target directory and `-f/--force` to overwrite existing files.
+
+### Changed
+- `kaggle quota` fallback now parses `--format json` output first (kaggle CLI >= 2.2.3), keeping the plain-text parser only for older CLIs.
+- `kagitch remove` revokes the account's Kaggle token server-side (`kaggle auth revoke`, CLI >= 2.2.4) before deleting local credentials; failure warns but never blocks removal.
+- `kagitch doctor` checks the installed kaggle CLI version and warns when it is older than 2.2.4 (quota command requires >= 2.2.1).
+
 ## [1.5.1] - 2026-07-14
 
 ### Fixed

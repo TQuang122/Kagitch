@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json as _json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -667,3 +668,265 @@ def _browse_kernel_logs(config: dict) -> int:
 
     render_result(result, kernel_ref=kernel)
     return 0
+
+
+# ── kernel output download ─────────────────────────────────────
+
+
+def _kernel_output_help() -> None:
+    """Print focused help for `kagitch kernel output`."""
+    console.print("[bold]Usage:[/bold]")
+    console.print(
+        "  [green]kagitch kernel output [owner/slug] [options][/]"
+    )
+    console.print()
+    console.print("[bold]Options:[/bold]")
+    console.print("  [cyan]-a, --all[/]       download every output file via kaggle CLI")
+    console.print("  [cyan]-p, --path DIR[/]   target directory (default: ./<slug>-output)")
+    console.print("  [cyan]-f, --force[/]     overwrite existing files")
+    console.print("  [cyan]--help[/]           show this help")
+    console.print()
+    console.print("[bold]Without a ref:[/] pick an account and kernel interactively.")
+
+
+def _parse_kernel_output_args(rest: list[str]) -> dict | None:
+    """Parse args for ``kagitch kernel output``.
+
+    Returns a dict with ref/all/path/force/help keys, or None on bad
+    flags (caller prints usage).
+    """
+    all_ = False
+    force = False
+    path: str | None = None
+    show_help = False
+    positional: list[str] = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("-a", "--all"):
+            all_ = True
+        elif a in ("-f", "--force"):
+            force = True
+        elif a in ("-p", "--path"):
+            i += 1
+            if i >= len(rest):
+                return None
+            path = rest[i]
+        elif a in ("--help", "-h", "help"):
+            show_help = True
+        else:
+            if a.startswith("-"):
+                return None
+            positional.append(a)
+        i += 1
+    if len(positional) > 1:
+        return None
+    return {
+        "ref": positional[0] if positional else None,
+        "all": all_,
+        "path": path,
+        "force": force,
+        "help": show_help,
+    }
+
+
+def _download_all_outputs(ref: str, target: Path, force: bool) -> int:
+    """Download every output file via the kaggle CLI subprocess."""
+    cmd = ["kaggle", "kernels", "output", "download", ref, "-p", str(target)]
+    if force:
+        cmd.append("-o")
+    try:
+        proc = subprocess.run(cmd, timeout=600)
+    except FileNotFoundError:
+        console.print(err("kaggle CLI not found on PATH. Install with: pip install kaggle"))
+        return 1
+    except subprocess.TimeoutExpired:
+        console.print(err("kaggle kernels output download timed out after 600s"))
+        return 1
+    if proc.returncode != 0:
+        console.print(err(f"kaggle exited with code {proc.returncode}"))
+        return proc.returncode
+    console.print(ok(f"Downloaded outputs to [cyan]{target}[/]"))
+    return 0
+
+
+def _select_output_files(files: list, slug: str) -> list:
+    """Multi-select output files and directories via questionary.checkbox.
+
+    Returns the chosen OutputFile objects (empty when cancelled).
+    """
+    import questionary
+
+    file_entries = sorted(f.path for f in files if f.url)
+    dirs = sorted({str(Path(f.path).parent) for f in files if f.url and "/" in f.path})
+    choices: list[str] = []
+    if any(not f.url and f.log_text for f in files):
+        choices.append(f"[log] {slug}.log")
+    choices.extend(f"[dir] {d}/" for d in dirs)
+    choices.extend(file_entries)
+
+    answer = questionary.checkbox(
+        "Select files to download ([dir] selects everything inside):",
+        choices=choices,
+        qmark=_kernel_qmark(),
+        style=_kernel_style(),
+    ).ask()
+    if answer is None:
+        console.print(info("Cancelled."))
+        return []
+
+    wanted_dirs = {c[len("[dir] "):-1] for c in answer if c.startswith("[dir] ")}
+    selected = [
+        f for f in files
+        if f.url
+        and (f.path in answer or any(f.path.startswith(d + "/") for d in wanted_dirs))
+    ]
+    if f"[log] {slug}.log" in answer:
+        selected.extend(f for f in files if not f.url and f.log_text)
+    return selected
+
+
+def _pick_kernel_interactive(config: dict) -> str | None:
+    """Pick account then kernel interactively; returns a kernel ref."""
+    from ..logs_viewer import list_kernels
+
+    acc = display._select_account_interactive(config)
+    if acc is None:
+        return None
+    console.print()
+    _apply_account_env(acc)
+    ok(f"Using [bold]{acc.name}[/]")
+
+    with display._tty_status(f"[bold green]Fetching kernels for [cyan]{acc.name}[/]..."):
+        kernels = list_kernels(_active_username_from_account(acc))
+
+    if not kernels:
+        console.print(err(f"No kernels found for account [bold]{acc.name}[/]"))
+        return None
+
+    _STATUS_STYLES = {
+        "COMPLETE": "green",
+        "complete": "green",
+        "ERROR": "bold red",
+        "error": "bold red",
+        "RUNNING": "yellow",
+        "running": "yellow",
+        "QUEUED": "dim",
+        "queued": "dim",
+        "PENDING": "dim",
+        "pending": "dim",
+    }
+
+    table = Table(
+        title=f"Kernels for [bold]{acc.name}[/]",
+        header_style="bold cyan",
+        border_style="blue",
+    )
+    table.add_column("#", style="dim", no_wrap=True)
+    table.add_column("Slug", style="cyan", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Last Run", style="dim")
+    for i, k in enumerate(kernels, 1):
+        status_str = k.status if k.status else "-"
+        status_t = Text(status_str, style=_STATUS_STYLES.get(k.status, "dim")) if k.status else Text("-", style="dim")
+        table.add_row(str(i), k.ref, k.title or "-", status_t, k.last_run_time)
+
+    if sys.stderr.isatty():
+        console.print(table)
+    else:
+        tty = display._open_tty("w")
+        if tty is not None:
+            with tty:
+                tty_console = Console(file=tty, force_terminal=True)
+                tty_console.print(table)
+        else:
+            console.print(table)
+
+    _ANSI_STATUS_COLORS = {
+        "COMPLETE": "32",
+        "complete": "32",
+        "ERROR": "1;31",
+        "error": "1;31",
+        "RUNNING": "33",
+        "running": "33",
+    }
+    kernel_options = []
+    for i, k in enumerate(kernels):
+        ref_label = f"{i+1}. \x1b[36m{k.ref}\x1b[0m"
+        if k.status:
+            ansi_color = _ANSI_STATUS_COLORS.get(k.status, "90")
+            ref_label += f"  \x1b[{ansi_color}m({k.status})\x1b[0m"
+        kernel_options.append(ref_label)
+    idx = display._terminal_select(kernel_options)
+    if idx is None:
+        console.print(info("Cancelled."))
+        return None
+    return kernels[idx].ref
+
+
+def _kernel_output_flow(config: dict, args: dict) -> int:
+    """List, select and download outputs for a resolved kernel ref."""
+    from ..kernel_outputs import KernelOutputError, download_files, list_output_files
+
+    ref = args["ref"]
+    parts = ref.split("/")
+    if len(parts) not in (2, 3):
+        console.print(err("Kernel ref must be owner/slug or owner/slug/version"))
+        return 1
+    owner, slug = parts[0], parts[1]
+    version = parts[2] if len(parts) == 3 else None
+    target = Path(args["path"]) if args["path"] else Path.cwd() / f"{slug}-output"
+
+    if args["all"]:
+        return _download_all_outputs(ref, target, args["force"])
+
+    with display._tty_status(f"[bold green]Fetching outputs for [cyan]{ref}[/]..."):
+        try:
+            files = list_output_files(owner, slug, version_label=version)
+        except KernelOutputError as e:
+            console.print(f"[red]\u2718 {e}[/]")
+            return 1
+
+    if not files:
+        console.print(err(f"No output files found for [bold]{ref}[/]"))
+        return 1
+
+    selected = _select_output_files(files, slug)
+    if not selected:
+        return 1
+
+    target.mkdir(parents=True, exist_ok=True)
+    with display._tty_status(f"[bold green]Downloading {len(selected)} file(s) to [cyan]{target}[/]..."):
+        try:
+            downloaded, skipped = download_files(selected, target, force=args["force"])
+        except KernelOutputError as e:
+            console.print(f"[red]\u2718 {e}[/]")
+            return 1
+
+    console.print(ok(f"Downloaded {len(downloaded)} file(s) to [cyan]{target}[/]"))
+    if skipped:
+        console.print(f"[{C_WARN}]Skipped {skipped} file(s) \u2014 use [bold]--force[/] to overwrite[/]")
+    return 0
+
+
+def cmd_kernel_output(config: dict, rest: list[str]) -> int:
+    """Download a kernel's output files (all or a selection)."""
+    args = _parse_kernel_output_args(rest)
+    if args is None:
+        console.print(err(
+            "Usage: kagitch kernel output [owner/slug] [-a|--all] [-p DIR] [-f|--force]"
+        ))
+        return 1
+    if args["help"]:
+        _kernel_output_help()
+        return 0
+    if args["ref"] is None:
+        ref = _pick_kernel_interactive(config)
+        if ref is None:
+            return 1
+        args["ref"] = ref
+    elif not _auto_switch_for_kernel(config, args["ref"]):
+        console.print(err(f"Cannot determine owner for [cyan]{args['ref']}[/]"))
+        return 1
+    return _kernel_output_flow(config, args)

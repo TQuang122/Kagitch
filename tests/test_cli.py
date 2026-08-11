@@ -1794,6 +1794,12 @@ class TestCliCoverage:
             rc, out = run_cli("kernel", "logs", "mykernel", capsys=capsys)
         assert rc == 0
 
+    def test_kernel_output_dispatch(self, temp_env, capsys, monkeypatch):
+        """kagitch kernel output <ref> calls cmd_kernel_output."""
+        with patch("kaggle_switch.cli.cmd_kernel_output", return_value=0):
+            rc, out = run_cli("kernel", "output", "owner/slug", "-a", capsys=capsys)
+        assert rc == 0
+
     def test_main_exception_handler(self, temp_env, capsys):
         """Lines 37-40: main() catches _main() exceptions and returns 1."""
         with patch("kaggle_switch.cli._main", side_effect=ValueError("boom")):

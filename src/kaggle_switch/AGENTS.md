@@ -62,10 +62,9 @@ Main Python package implementing the Kagitch CLI tool for managing multiple Kagg
 - Token refresh uses `kagglesdk` for OAuth validation, falls back to checking `kaggle` CLI exit code
 - Legacy accounts use a `kaggle.json` file path instead of OAuth
 
-#### The kagglesdk Patch (`checker.py`)
-- `kagglesdk` has a serialization bug with `TimeDeltaSerializer` for whole-second durations
-- `checker.py` patches this at module level by replacing `kagglesdk.common.sessions.TimeDeltaSerializer`
-- If you touch anything related to time duration serialization, check this patch first
+#### The kagglesdk Import Guard (`checker.py`)
+- `checker.py` guards `KaggleClient` behind a `_HAS_SDK` flag; missing SDK degrades to the `kaggle quota` CLI fallback
+- kagglesdk >= 0.1.33 (bundled with kaggle CLI >= 2.2.4) fixed the `TimeDeltaSerializer` whole-second duration crash upstream — do NOT re-add a monkeypatch
 
 #### Logs Viewer
 - Uses Rich `Layout` with a header pane and a scrollable main pane

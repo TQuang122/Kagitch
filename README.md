@@ -74,6 +74,7 @@ $ kagitch
 | `kagitch remove <N\|name>`  | `rm`                     | Remove an account (deletes credentials) |
 | `kagitch rename <N> <name>` |                          | Rename an account                       |
 | `kagitch patch [path]`      |                          | Patch `kernel-metadata.json` id         |
+| `kagitch kernel output [owner/slug]` |                  | Download kernel outputs (interactive file/dir selection, or `-a` for all) |
 | `kagitch check`             |                          | Check quota & auth for all accounts     |
 | `kagitch doctor`            |                          | System diagnostics                      |
 | `kagitch update`            |                          | Pull latest version from git            |
