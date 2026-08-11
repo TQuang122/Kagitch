@@ -1197,6 +1197,8 @@ class TestCmdKernelOutput:
             return SimpleNamespace(ask=lambda: ["a.csv", "[dir] data/", "[log] slug.log"])
 
         monkeypatch.setattr("questionary.checkbox", fake_checkbox)
+        monkeypatch.setattr("questionary.select",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: "Download all files"))
         monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
                             lambda f, t, **kw: ([t / f2.path for f2 in f], 0))
 
@@ -1206,6 +1208,58 @@ class TestCmdKernelOutput:
         out = capsys.readouterr().out
         assert "Downloaded 3 file(s)" in _plain(out)
         assert (tmp_path / "slug-output").is_dir()
+
+    def test_select_mode_drill_into_dir(self, capsys, monkeypatch, tmp_path):
+        """Picking '[dir]' with 'Pick files...' drills into the folder."""
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        files = [
+            OutputFile(path="a.csv", url="http://u/a"),
+            OutputFile(path="data/b.csv", url="http://u/b"),
+            OutputFile(path="data/sub/c.csv", url="http://u/c"),
+        ]
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: files)
+
+        checkbox_answers = iter([["[dir] data/"], ["b.csv"]])
+
+        def fake_checkbox(*a, **kw):
+            return SimpleNamespace(ask=lambda: next(checkbox_answers))
+
+        monkeypatch.setattr("questionary.checkbox", fake_checkbox)
+        monkeypatch.setattr("questionary.select",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: "Pick files..."))
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / f2.path for f2 in f], 0))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Downloaded 1 file(s)" in _plain(out)
+
+    def test_select_mode_dir_mode_cancelled(self, capsys, monkeypatch, tmp_path):
+        """A cancelled dir-mode question silently skips that directory."""
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
+                            lambda o, s, **kw: [OutputFile(path="data/b.csv", url="http://u/b")])
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["[dir] data/"]))
+        monkeypatch.setattr("questionary.select",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: None))
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / f2.path for f2 in f], 0))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 1
 
     def test_select_mode_skip_warning(self, capsys, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))

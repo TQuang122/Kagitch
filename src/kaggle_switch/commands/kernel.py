@@ -751,39 +751,73 @@ def _download_all_outputs(ref: str, target: Path, force: bool) -> int:
 
 
 def _select_output_files(files: list, slug: str) -> list:
-    """Multi-select output files and directories via questionary.checkbox.
+    """Multi-select output files via drill-down into directories.
 
-    Returns the chosen OutputFile objects (empty when cancelled).
+    Whole directories can be grabbed at once, or opened to pick the
+    individual files inside.  Returns [] when cancelled.
     """
     import questionary
 
-    file_entries = sorted(f.path for f in files if f.url)
-    dirs = sorted({str(Path(f.path).parent) for f in files if f.url and "/" in f.path})
-    choices: list[str] = []
-    if any(not f.url and f.log_text for f in files):
-        choices.append(f"[log] {slug}.log")
-    choices.extend(f"[dir] {d}/" for d in dirs)
-    choices.extend(file_entries)
+    all_files = [f for f in files if f.url]
+    by_path = {f.path: f for f in all_files}
+    log_entry = next((f for f in files if not f.url and f.log_text), None)
 
-    answer = questionary.checkbox(
-        "Select files to download ([dir] selects everything inside):",
-        choices=choices,
-        qmark=_kernel_qmark(),
-        style=_kernel_style(),
-    ).ask()
-    if answer is None:
-        console.print(info("Cancelled."))
-        return []
+    def _children(prefix: str) -> tuple[list[str], list[str]]:
+        subdirs: set[str] = set()
+        leaves: list[str] = []
+        for f in all_files:
+            if not f.path.startswith(prefix):
+                continue
+            rest = f.path[len(prefix):]
+            if "/" in rest:
+                subdirs.add(rest.split("/", 1)[0])
+            else:
+                leaves.append(rest)
+        return sorted(subdirs), sorted(leaves)
 
-    wanted_dirs = {c[len("[dir] "):-1] for c in answer if c.startswith("[dir] ")}
-    selected = [
-        f for f in files
-        if f.url
-        and (f.path in answer or any(f.path.startswith(d + "/") for d in wanted_dirs))
-    ]
-    if f"[log] {slug}.log" in answer:
-        selected.extend(f for f in files if not f.url and f.log_text)
-    return selected
+    def _pick(prefix: str) -> list | None:
+        subdirs, leaves = _children(prefix)
+        choices: list[str] = []
+        if prefix == "" and log_entry is not None:
+            choices.append(f"[log] {slug}.log")
+        choices.extend(f"[dir] {d}/" for d in subdirs)
+        choices.extend(leaves)
+        if not choices:
+            return []
+        answer = questionary.checkbox(
+            f"Select files to download ({prefix or 'root'}):",
+            choices=choices,
+            qmark=_kernel_qmark(),
+            style=_kernel_style(),
+        ).ask()
+        if answer is None:
+            console.print(info("Cancelled."))
+            return None
+        selected: list = []
+        for c in answer:
+            if c.startswith("[dir] "):
+                sub = prefix + c[len("[dir] "):-1] + "/"
+                mode = questionary.select(
+                    f"'{sub}' \u2014 download all files or pick inside?",
+                    choices=["Download all files", "Pick files..."],
+                    default="Download all files",
+                    qmark=_kernel_qmark(),
+                    style=_kernel_style(),
+                ).ask()
+                if mode == "Pick files...":
+                    deeper = _pick(sub)
+                    if deeper is None:
+                        return None
+                    selected.extend(deeper)
+                elif mode == "Download all files":
+                    selected.extend(f for f in all_files if f.path.startswith(sub))
+            elif c == f"[log] {slug}.log":
+                selected.append(log_entry)
+            else:
+                selected.append(by_path[prefix + c])
+        return selected
+
+    return _pick("") or []
 
 
 def _pick_kernel_interactive(config: dict) -> str | None:
