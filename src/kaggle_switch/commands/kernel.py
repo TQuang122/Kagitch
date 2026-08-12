@@ -751,18 +751,13 @@ def _download_all_outputs(ref: str, target: Path, force: bool) -> int:
     return 0
 
 
-def _select_output_files(files: list, slug: str) -> list:
-    """Multi-select output files via drill-down into directories.
+def _select_output_files(files: list, ref: str) -> list:
+    """Multi-select output files directly on an interactive tree.
 
-    Whole directories can be grabbed at once, or opened to pick the
-    individual files inside.  Returns [] when cancelled.
+    Directories expand with the right arrow and toggle whole with
+    space; individual files toggle the same way.  Returns [] when
+    cancelled or nothing is selectable.
     """
-    import questionary
-
-    all_files = [f for f in files if f.url]
-    by_path = {f.path: f for f in all_files}
-    log_entry = next((f for f in files if not f.url and f.log_text), None)
-
     if not sys.stdin.isatty():
         console.print(err(
             "Interactive selection needs a terminal \u2014 use [bold]-a/--all[/] "
@@ -770,62 +765,38 @@ def _select_output_files(files: list, slug: str) -> list:
         ))
         return []
 
-    def _children(prefix: str) -> tuple[list[str], list[str]]:
-        subdirs: set[str] = set()
-        leaves: list[str] = []
-        for f in all_files:
-            if not f.path.startswith(prefix):
-                continue
-            rest = f.path[len(prefix):]
-            if "/" in rest:
-                subdirs.add(rest.split("/", 1)[0])
-            else:
-                leaves.append(rest)
-        return sorted(subdirs), sorted(leaves)
+    by_path = {f.path: f for f in files}
+    root: list[display.TreeItem] = []
+    dir_index: dict[str, list[display.TreeItem]] = {"": root}
+    for f in sorted(files, key=lambda f: f.path):
+        parts = f.path.split("/")
+        parent = root
+        prefix = ""
+        for part in parts[:-1]:
+            prefix = f"{prefix}{part}/"
+            if prefix not in dir_index:
+                node = display.TreeItem(label=part, path=prefix.rstrip("/"))
+                dir_index[prefix] = node.children
+                parent.append(node)
+            parent = dir_index[prefix]
+        size = _fmt_bytes(
+            f.size if f.url else (len(f.log_text.encode()) if f.log_text else None)
+        )
+        parent.append(display.TreeItem(label=parts[-1], path=f.path, size=size))
 
-    def _pick(prefix: str) -> list | None:
-        subdirs, leaves = _children(prefix)
-        choices: list[str] = []
-        if prefix == "" and log_entry is not None:
-            choices.append(f"[log] {slug}.log")
-        choices.extend(f"[dir] {d}/" for d in subdirs)
-        choices.extend(leaves)
-        if not choices:
-            return []
-        answer = questionary.checkbox(
-            f"Select files to download ({prefix or 'root'}):",
-            choices=choices,
-            qmark=_kernel_qmark(),
-            style=_kernel_style(),
-        ).ask()
-        if answer is None:
-            console.print(info("Cancelled."))
-            return None
-        selected: list = []
-        for c in answer:
-            if c.startswith("[dir] "):
-                sub = prefix + c[len("[dir] "):-1] + "/"
-                mode = questionary.select(
-                    f"'{sub}' \u2014 download all files or pick inside?",
-                    choices=["Download all files", "Pick files..."],
-                    default="Download all files",
-                    qmark=_kernel_qmark(),
-                    style=_kernel_style(),
-                ).ask()
-                if mode == "Pick files...":
-                    deeper = _pick(sub)
-                    if deeper is None:
-                        return None
-                    selected.extend(deeper)
-                elif mode == "Download all files":
-                    selected.extend(f for f in all_files if f.path.startswith(sub))
-            elif c == f"[log] {slug}.log":
-                selected.append(log_entry)
-            else:
-                selected.append(by_path[prefix + c])
-        return selected
+    if not root:
+        return []
 
-    return _pick("") or []
+    checked = display._terminal_tree_select(
+        root,
+        title=f"outputs: {ref} \u00b7 {len(files)} file(s)",
+        footer="\u2191\u2193 ch\u1ecdn \u00b7 \u2192 m\u1edf \u00b7 \u2190 g\u1eadp \u00b7 "
+        "space ch\u1ecdn \u00b7 Enter xong \u00b7 q tho\u00e1t",
+    )
+    if checked is None:
+        console.print(info("Cancelled."))
+        return []
+    return [by_path[p] for p in checked if p in by_path]
 
 
 def _pick_kernel_interactive(config: dict) -> str | None:
@@ -921,31 +892,6 @@ def _fmt_bytes(n: int | None) -> str:
         size /= 1024
 
 
-def _render_output_tree(files: list, ref: str) -> None:
-    """Print the output structure as a Rich Tree with file sizes."""
-    from rich.tree import Tree
-
-    known = [f.size for f in files if f.size is not None]
-    total = sum(known)
-    label = f"outputs: [cyan]{ref}[/] \u00b7 {len(files)} file(s)"
-    if known:
-        label += f" \u00b7 [green]{_fmt_bytes(total)}[/]"
-    tree = Tree(label, guide_style="dim")
-    nodes: dict[str, object] = {"": tree}
-    for f in sorted(files, key=lambda f: f.path):
-        parts = f.path.split("/")
-        parent = nodes[""]
-        current = ""
-        for part in parts[:-1]:
-            current = f"{current}{part}/"
-            if current not in nodes:
-                nodes[current] = parent.add(f"[cyan]{part}/[/]")
-            parent = nodes[current]
-        size_hint = f.size if f.url else (len(f.log_text.encode()) if f.log_text else None)
-        parent.add(f"{parts[-1]}  [dim]{_fmt_bytes(size_hint)}[/]")
-    console.print(tree)
-
-
 def _download_with_progress(
     selected: list, target: Path, force: bool
 ) -> tuple[list, int, int]:
@@ -1036,10 +982,7 @@ def _kernel_output_flow(config: dict, args: dict) -> int:
             console.print(f"[red]\u2718 {e}[/]")
             return 1
 
-    _render_output_tree(files, ref)
-    console.print()
-
-    selected = _select_output_files(files, slug)
+    selected = _select_output_files(files, ref)
     if not selected:
         return 1
 

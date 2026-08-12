@@ -12,6 +12,7 @@ import re
 import shutil
 import sys
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
@@ -589,3 +590,316 @@ def _select_account_interactive(config: dict) -> Account | None:
         console.print(err(f"Invalid account: {choice}"))
         console.print(f"  Available: {pairs}")
     return acc
+
+
+# ── Interactive tree picker ────────────────────────────────────
+
+
+@dataclass
+class TreeItem:
+    """A node in the interactive tree picker."""
+
+    label: str
+    path: str = ""
+    size: str = ""
+    children: list["TreeItem"] = field(default_factory=list)
+
+
+def _tree_visible(
+    items: list[TreeItem], expanded: set[str]
+) -> list[tuple[int, TreeItem, bool]]:
+    """Flatten the forest into visible rows; expanded dirs are inlined."""
+    visible: list[tuple[int, TreeItem, bool]] = []
+
+    def walk(node_list: list[TreeItem], depth: int) -> None:
+        for it in node_list:
+            if it.children:
+                visible.append((depth, it, True))
+                if it.path in expanded:
+                    walk(it.children, depth + 1)
+            else:
+                visible.append((depth, it, False))
+
+    walk(items, 0)
+    return visible
+
+
+def _leaf_paths(item: TreeItem) -> list[str]:
+    paths: list[str] = []
+
+    def collect(node: TreeItem) -> None:
+        if node.children:
+            for c in node.children:
+                collect(c)
+        elif node.path:
+            paths.append(node.path)
+
+    collect(item)
+    return paths
+
+
+def _dir_state(item: TreeItem, checked: set[str]) -> str:
+    """Checked state of a directory subtree: '', 'partial' or 'all'."""
+    paths = _leaf_paths(item)
+    if not paths:
+        return ""
+    n = sum(1 for p in paths if p in checked)
+    if n == len(paths):
+        return "all"
+    if n:
+        return "partial"
+    return ""
+
+
+def _toggle(item: TreeItem, checked: set[str]) -> set[str]:
+    """Toggle a leaf, or the whole subtree of a directory."""
+    state = set(checked)
+    if item.children:
+        paths = _leaf_paths(item)
+        if all(p in state for p in paths):
+            for p in paths:
+                state.discard(p)
+        else:
+            state.update(paths)
+    else:
+        if item.path in state:
+            state.discard(item.path)
+        else:
+            state.add(item.path)
+    return state
+
+
+def _build_tree_lines(
+    items: list[TreeItem],
+    expanded: set[str],
+    checked: set[str],
+    visible: list[tuple[int, TreeItem, bool]],
+    sel: int,
+    title: str,
+    footer: str,
+) -> list[str]:
+    """Build ANSI display lines for the interactive tree picker."""
+    term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
+    card_width = min(80, term_width - 2)
+    lines: list[str] = []
+
+    if title:
+        lines.append(f"\x1b[1;36m{title}\x1b[0m")
+        lines.append("")
+
+    rows: list[tuple[str, str]] = []
+    for depth, item, is_dir in visible:
+        indent = "  " * depth
+        if is_dir:
+            arrow = "\u25be" if item.path in expanded else "\u25b8"
+            state = _dir_state(item, checked)
+            box = "[✓]" if state == "all" else ("[-]" if state == "partial" else "[ ]")
+            rows.append((f"{indent}{arrow} {box} {item.label}/", ""))
+        else:
+            box = "[✓]" if item.path in checked else "[ ]"
+            rows.append((f"{indent}{box} {item.label}", item.size))
+
+    label_w = max((len(_strip_ansi(label)) for label, _ in rows), default=0)
+    for i, (label, size) in enumerate(rows):
+        pad = max(0, label_w - len(_strip_ansi(label)))
+        suffix = f"  {size}" if size else ""
+        if i == sel:
+            lines.append(f"\x1b[36m\u276f\x1b[0m {label}{' ' * pad}{suffix}")
+        else:
+            lines.append(f"  {label}{' ' * pad}{suffix}")
+
+    if footer:
+        lines.append("")
+        lines.append(f"\x1b[2m{footer}\x1b[0m")
+
+    return lines
+
+
+def _terminal_tree_select_unix(
+    items: list[TreeItem],
+    title: str,
+    footer: str,
+) -> set[str] | None:
+    """Unix implementation of the interactive tree picker (termios raw keys)."""
+    import termios
+    import tty
+
+    expanded: set[str] = set()
+    checked: set[str] = set()
+    visible = _tree_visible(items, expanded)
+    sel = 0
+    tty_out = None
+    out = sys.stderr
+
+    if not sys.stderr.isatty():
+        tty_out = _open_tty("w")
+        if tty_out:
+            out = tty_out
+
+    if not sys.stdin.isatty():
+        if tty_out:
+            tty_out.close()
+        return None
+
+    fd = sys.stdin.fileno()
+    old_attr = termios.tcgetattr(fd)
+    cur_lines: list[str] = []
+
+    try:
+        tty.setraw(fd)
+        cur_lines = _build_tree_lines(items, expanded, checked, visible, sel, title, footer)
+        _write_select_lines(out, cur_lines)
+
+        while True:
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                rest = sys.stdin.read(2)
+                if rest == "[A":
+                    sel = (sel - 1) % len(visible)
+                elif rest == "[B":
+                    sel = (sel + 1) % len(visible)
+                elif rest == "[C":
+                    _, item, is_dir = visible[sel]
+                    if is_dir:
+                        expanded.add(item.path)
+                        visible = _tree_visible(items, expanded)
+                        sel = min(sel, len(visible) - 1)
+                elif rest == "[D":
+                    _, item, is_dir = visible[sel]
+                    if is_dir:
+                        expanded.discard(item.path)
+                        visible = _tree_visible(items, expanded)
+                        sel = min(sel, len(visible) - 1)
+                else:
+                    continue
+            elif ch in ("\r", "\n"):
+                break
+            elif ch == " ":
+                _, item, _ = visible[sel]
+                checked = _toggle(item, checked)
+            elif ch == "\x03":
+                raise KeyboardInterrupt
+            elif ch in ("q",):
+                checked = None  # type: ignore[assignment]
+                break
+            else:
+                continue
+
+            _clear_select_lines(out, len(cur_lines))
+            cur_lines = _build_tree_lines(items, expanded, checked, visible, sel, title, footer)
+            _write_select_lines(out, cur_lines)
+    except (KeyboardInterrupt, EOFError):
+        checked = None  # type: ignore[assignment]
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+        if cur_lines:
+            _clear_select_lines(out, len(cur_lines))
+        if tty_out:
+            tty_out.close()
+
+    return checked
+
+
+def _terminal_tree_select_win(
+    items: list[TreeItem],
+    title: str,
+    footer: str,
+) -> set[str] | None:
+    """Windows implementation of the interactive tree picker (msvcrt keys)."""
+    import msvcrt
+
+    expanded: set[str] = set()
+    checked: set[str] = set()
+    visible = _tree_visible(items, expanded)
+    sel = 0
+    tty_out = _open_tty("w")
+    out = tty_out or sys.stderr
+    cur_lines: list[str] = []
+
+    try:
+        cur_lines = _build_tree_lines(items, expanded, checked, visible, sel, title, footer)
+        _write_select_lines(out, cur_lines)
+
+        while True:
+            ch = msvcrt.getch()
+            if ch in (b"\x00", b"\xe0"):
+                ch2 = msvcrt.getch()
+                if ch2 == b"H":
+                    sel = (sel - 1) % len(visible)
+                elif ch2 == b"P":
+                    sel = (sel + 1) % len(visible)
+                elif ch2 == b"M":
+                    _, item, is_dir = visible[sel]
+                    if is_dir:
+                        expanded.add(item.path)
+                        visible = _tree_visible(items, expanded)
+                        sel = min(sel, len(visible) - 1)
+                elif ch2 == b"K":
+                    _, item, is_dir = visible[sel]
+                    if is_dir:
+                        expanded.discard(item.path)
+                        visible = _tree_visible(items, expanded)
+                        sel = min(sel, len(visible) - 1)
+                else:
+                    continue
+            elif ch in (b"\r", b"\n"):
+                break
+            elif ch == b" ":
+                _, item, _ = visible[sel]
+                checked = _toggle(item, checked)
+            elif ch == b"\x03":
+                raise KeyboardInterrupt
+            elif ch in (b"q", b"Q"):
+                checked = None  # type: ignore[assignment]
+                break
+            else:
+                continue
+
+            _clear_select_lines(out, len(cur_lines))
+            cur_lines = _build_tree_lines(items, expanded, checked, visible, sel, title, footer)
+            _write_select_lines(out, cur_lines)
+    except (KeyboardInterrupt, EOFError):
+        checked = None  # type: ignore[assignment]
+    finally:
+        if cur_lines:
+            _clear_select_lines(out, len(cur_lines))
+        if tty_out:
+            try:
+                tty_out.close()
+            except Exception:
+                pass
+
+    return checked
+
+
+def _terminal_tree_select(
+    items: list[TreeItem],
+    *,
+    title: str = "",
+    footer: str = "",
+) -> set[str] | None:
+    """Arrow-key interactive tree picker with space-toggle checkboxes.
+
+    Dispatches to the unix or Windows key loop.  Returns the set of
+    checked leaf paths, or ``None`` when cancelled.
+    """
+    if not _tree_visible(items, set()):
+        return set()
+
+    if os.name == "nt":
+        tty_probe = _open_tty("w")
+        if tty_probe is None:
+            return None
+        try:
+            tty_probe.close()
+        except Exception:
+            pass
+        return _terminal_tree_select_win(items, title=title, footer=footer)
+
+    try:
+        import termios  # noqa: F401
+        import tty  # noqa: F401
+    except ImportError:
+        return None
+
+    return _terminal_tree_select_unix(items, title=title, footer=footer)

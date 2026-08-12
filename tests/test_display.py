@@ -982,3 +982,292 @@ class TestFileContextManager:
                 mock_console.return_value.status.return_value.__exit__ = MagicMock()
                 with display._tty_status("testing"):
                     pass
+
+
+# ── Interactive tree picker ────────────────────────────────────
+
+
+def _make_tree():
+    """items: data/(b.csv, sub/c.csv), a.csv, slug.log"""
+    data = display.TreeItem(label="data", path="data")
+    data.children.append(display.TreeItem(label="b.csv", path="data/b.csv", size="1.0 KB"))
+    sub = display.TreeItem(label="sub", path="data/sub")
+    sub.children.append(display.TreeItem(label="c.csv", path="data/sub/c.csv", size="2.0 KB"))
+    data.children.append(sub)
+    return [
+        data,
+        display.TreeItem(label="a.csv", path="a.csv", size="3.0 KB"),
+        display.TreeItem(label="slug.log", path="slug.log", size="4.0 KB"),
+    ]
+
+
+class TestTreeHelpers:
+    def test_tree_visible_respects_expansion(self):
+        items = _make_tree()
+        rows = display._tree_visible(items, set())
+        assert [(d, it.label, is_dir) for d, it, is_dir in rows] == [
+            (0, "data", True), (0, "a.csv", False), (0, "slug.log", False),
+        ]
+        rows = display._tree_visible(items, {"data"})
+        assert [(d, it.label, is_dir) for d, it, is_dir in rows] == [
+            (0, "data", True), (1, "b.csv", False), (1, "sub", True),
+            (0, "a.csv", False), (0, "slug.log", False),
+        ]
+
+    def test_dir_state(self):
+        items = _make_tree()
+        data = items[0]
+        assert display._dir_state(data, set()) == ""
+        assert display._dir_state(data, {"data/b.csv"}) == "partial"
+        assert display._dir_state(data, {"data/b.csv", "data/sub/c.csv"}) == "all"
+
+    def test_toggle_leaf(self):
+        items = _make_tree()
+        state = display._toggle(items[1], set())
+        assert state == {"a.csv"}
+        assert display._toggle(items[1], state) == set()
+
+    def test_toggle_dir_whole_subtree(self):
+        items = _make_tree()
+        data = items[0]
+        state = display._toggle(data, set())
+        assert state == {"data/b.csv", "data/sub/c.csv"}
+        assert display._toggle(data, state) == set()
+        # partial -> all
+        partial = display._toggle(data, {"data/b.csv"})
+        assert partial == {"data/b.csv", "data/sub/c.csv"}
+
+    def test_build_tree_lines(self):
+        items = _make_tree()
+        visible = display._tree_visible(items, {"data"})
+        lines = display._build_tree_lines(
+            items, {"data"}, {"data/b.csv"}, visible, sel=1,
+            title="outputs: t", footer="q thoát",
+        )
+        text = "\n".join(lines)
+        assert "outputs: t" in text
+        assert "q thoát" in text
+        assert "\u276f" in lines[3]  # cursor marker on b.csv row
+        assert "[✓]" in text
+        assert "[-]" in text  # data dir partial
+        assert "1.0 KB" in text
+
+
+class _FakeStdin:
+    def __init__(self, keys):
+        self._keys = list(keys)
+
+    def isatty(self):
+        return True
+
+    def fileno(self):
+        return 999
+
+    def read(self, n=1):
+        out = "".join(self._keys[:n])
+        del self._keys[:n]
+        return out
+
+
+class TestTreeSelectUnix:
+    def _run(self, keys, capsys):
+        mock_termios = MagicMock()
+        mock_termios.tcgetattr.return_value = "attrs"
+        mock_tty = MagicMock()
+        with patch.dict("sys.modules", {"termios": mock_termios, "tty": mock_tty}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                with patch("sys.stdin", _FakeStdin(keys)):
+                    return display._terminal_tree_select_unix(
+                        _make_tree(), title="t", footer="f"
+                    )
+
+    def test_enter_confirms_empty(self, capsys):
+        assert self._run(["\r"], capsys) == set()
+
+    def test_space_then_enter(self, capsys):
+        # cursor starts on the first (directory) row -> toggles its subtree
+        assert self._run([" ", "\r"], capsys) == {"data/b.csv", "data/sub/c.csv"}
+
+    def test_arrow_down_toggles_second(self, capsys):
+        # cursor starts on data/ (index 0); down -> a.csv; space; enter
+        assert self._run(["\x1b", "[", "B", " ", "\r"], capsys) == {"a.csv"}
+
+    def test_right_expands_dir_then_toggle_all(self, capsys):
+        # expand data/, space toggles whole subtree
+        assert self._run(["\x1b", "[", "C", " ", "\r"], capsys) == {"data/b.csv", "data/sub/c.csv"}
+
+    def test_right_then_left_collapse(self, capsys):
+        assert self._run(["\x1b", "[", "C", "\x1b", "[", "D", "\r"], capsys) == set()
+
+    def test_q_cancels(self, capsys):
+        assert self._run(["q"], capsys) is None
+
+    def test_ctrl_c_cancels(self, capsys):
+        assert self._run(["\x03"], capsys) is None
+
+    def test_unknown_esc_ignored(self, capsys):
+        # unknown sequence [X then enter confirms
+        assert self._run(["\x1b", "[", "X", "\r"], capsys) == set()
+
+
+class TestTreeSelectWin:
+    def _run(self, keys):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = keys
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                return display._terminal_tree_select_win(_make_tree(), title="t", footer="f")
+
+    def test_space_then_enter(self):
+        # cursor starts on the first (directory) row -> toggles its subtree
+        assert self._run([b" ", b"\r"]) == {"data/b.csv", "data/sub/c.csv"}
+
+    def test_arrow_down_then_space(self):
+        assert self._run([b"\xe0", b"P", b" ", b"\r"]) == {"a.csv"}
+
+    def test_right_expand_then_toggle_dir(self):
+        assert self._run([b"\xe0", b"M", b" ", b"\r"]) == {"data/b.csv", "data/sub/c.csv"}
+
+    def test_left_collapse(self):
+        assert self._run([b"\xe0", b"M", b"\xe0", b"K", b"\r"]) == set()
+
+    def test_q_cancels(self):
+        assert self._run([b"q"]) is None
+
+    def test_ctrl_c_cancels(self):
+        assert self._run([b"\x03"]) is None
+
+
+class TestTreeSelectDispatcher:
+    def test_empty_visible_returns_empty_set(self):
+        assert display._terminal_tree_select([]) == set()
+
+    def test_windows_no_tty_returns_none(self):
+        with patch.object(display.os, "name", "nt"):
+            with patch.object(display, "_open_tty", return_value=None):
+                assert display._terminal_tree_select(_make_tree()) is None
+
+
+class TestTreeSelectBranches:
+    def test_dir_state_no_leaves(self):
+        d = display.TreeItem(label="x", path="x", children=[display.TreeItem(label="y")])
+        assert display._dir_state(d, set()) == ""
+
+    def test_unix_tty_out_and_close(self, capsys):
+        """stderr non-tty: output goes to the opened tty; close on exit."""
+        mock_tty = MagicMock()
+        mock_termios = MagicMock()
+        mock_termios.tcgetattr.return_value = "attrs"
+        with patch.dict("sys.modules", {"termios": mock_termios, "tty": MagicMock()}, clear=False):
+            with patch.object(display, "_open_tty", return_value=mock_tty):
+                with patch("sys.stdin", _FakeStdin(["q"])):
+                    with patch.object(display.sys.stderr, "isatty", return_value=False):
+                        result = display._terminal_tree_select_unix(_make_tree(), "t", "f")
+        assert result is None
+        mock_tty.close.assert_called_once()
+
+    def test_unix_stdin_not_tty(self, capsys):
+        class NonTtyStdin:
+            def isatty(self):
+                return False
+
+        mock_tty = MagicMock()
+        with patch.object(display, "_open_tty", return_value=mock_tty):
+            with patch("sys.stdin", NonTtyStdin()):
+                result = display._terminal_tree_select_unix(_make_tree(), "t", "f")
+        assert result is None
+        mock_tty.close.assert_called_once()
+
+    def test_unix_unknown_plain_key_ignored(self, capsys):
+        assert self._run_unix(["x", "\r"]) == set()
+
+    def _run_unix(self, keys):
+        mock_termios = MagicMock()
+        mock_termios.tcgetattr.return_value = "attrs"
+        with patch.dict("sys.modules", {"termios": mock_termios, "tty": MagicMock()}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                with patch("sys.stdin", _FakeStdin(keys)):
+                    return display._terminal_tree_select_unix(_make_tree(), "t", "f")
+
+    def test_win_unknown_extended_key(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\xe0", b"Z", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                assert display._terminal_tree_select_win(_make_tree(), "t", "f") == set()
+
+    def test_win_unknown_plain_key_ignored(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"x", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                assert display._terminal_tree_select_win(_make_tree(), "t", "f") == set()
+
+    def test_win_tty_out_close_error_swallowed(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\r"]
+        mock_tty = MagicMock()
+        mock_tty.close.side_effect = OSError("boom")
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=mock_tty):
+                result = display._terminal_tree_select_win(_make_tree(), "t", "f")
+        assert result == set()
+
+    def test_windows_dispatcher_routes_to_win(self):
+        mock_tty = MagicMock()
+        with patch.object(display.os, "name", "nt"):
+            with patch.object(display, "_open_tty", return_value=mock_tty):
+                with patch.object(display, "_terminal_tree_select_win", return_value={"a.csv"}) as mock_win:
+                    result = display._terminal_tree_select(_make_tree())
+        assert result == {"a.csv"}
+        mock_win.assert_called_once()
+        mock_tty.close.assert_called_once()
+
+    def test_unix_dispatcher_no_termios(self):
+        def fail_import(name, *a, **kw):
+            if name in ("termios", "tty"):
+                raise ImportError
+            return __import__(name, *a, **kw)
+
+        with patch("builtins.__import__", side_effect=fail_import):
+            assert display._terminal_tree_select(_make_tree()) is None
+
+
+class TestTreeSelectRemaining:
+    def test_unix_up_arrow_wraps(self):
+        mock_termios = MagicMock()
+        mock_termios.tcgetattr.return_value = "attrs"
+        with patch.dict("sys.modules", {"termios": mock_termios, "tty": MagicMock()}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                with patch("sys.stdin", _FakeStdin(["\x1b", "[", "A", " ", "\r"])):
+                    assert display._terminal_tree_select_unix(
+                        _make_tree(), "t", "f"
+                    ) == {"slug.log"}
+
+    def test_win_up_arrow_wraps(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\xe0", b"H", b" ", b"\r"]
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                assert display._terminal_tree_select_win(
+                    _make_tree(), "t", "f"
+                ) == {"slug.log"}
+
+    def test_windows_dispatcher_probe_close_error_swallowed(self):
+        mock_tty = MagicMock()
+        mock_tty.close.side_effect = OSError("boom")
+        with patch.object(display.os, "name", "nt"):
+            with patch.object(display, "_open_tty", return_value=mock_tty):
+                with patch.object(display, "_terminal_tree_select_win", return_value=set()) as mock_win:
+                    assert display._terminal_tree_select(_make_tree()) == set()
+        mock_win.assert_called_once()
+
+    def test_unix_dispatcher_routes_to_unix(self):
+        class NonTtyStdin:
+            def isatty(self):
+                return False
+
+        with patch("sys.stdin", NonTtyStdin()):
+            with patch.object(display, "_open_tty", return_value=None):
+                # non-tty stdin makes the unix loop bail out safely
+                assert display._terminal_tree_select(_make_tree()) is None
