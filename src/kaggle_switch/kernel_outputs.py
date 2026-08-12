@@ -1,8 +1,10 @@
 """Kernel output listing and download via kagglesdk signed URLs."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 _HAS_SDK = False
 try:
@@ -18,6 +20,7 @@ class OutputFile:
     path: str
     url: str | None = None
     log_text: str = ""
+    size: int | None = None
 
 
 class KernelOutputError(Exception):
@@ -77,17 +80,49 @@ def list_output_files(
     return files
 
 
+def fetch_sizes(files: list[OutputFile], *, session=None, max_workers: int = 8) -> None:
+    """Populate *size* on each file via parallel HEAD requests.
+
+    Failures leave the size as None so the caller can show a placeholder.
+    """
+    targets = [f for f in files if f.url]
+    if not targets:
+        return
+    try:
+        import requests
+    except ImportError as e:
+        raise KernelOutputError(
+            "requests is required to download files. Install with: pip install kaggle"
+        ) from e
+
+    sess = session if session is not None else requests.Session()
+
+    def _head(f: OutputFile) -> None:
+        try:
+            resp = sess.head(f.url, timeout=10)
+            if resp.status_code == 200 and resp.headers.get("Content-Length"):
+                f.size = int(resp.headers["Content-Length"])
+        except (OSError, ValueError):
+            pass
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        list(pool.map(_head, targets))
+
+
 def download_files(
     files: list[OutputFile],
     target_dir: Path,
     *,
     force: bool = False,
     session=None,
+    on_progress: Callable[[Path, int, int | None], None] | None = None,
 ) -> tuple[list[Path], int]:
     """Stream each file's signed URL into *target_dir*.
 
     Returns (downloaded paths, skipped count).  Entries without a URL
     (e.g. the kernel log) and existing files without *force* are skipped.
+    *on_progress* is called per chunk and once more with the final
+    byte count.
     """
     try:
         import requests
@@ -109,6 +144,8 @@ def download_files(
             if f.log_text:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(f.log_text)
+                if on_progress:
+                    on_progress(dest, len(f.log_text.encode()), len(f.log_text.encode()))
                 downloaded.append(dest)
             else:
                 skipped += 1
@@ -121,9 +158,16 @@ def download_files(
                 "The download URL may have expired - retry the command."
             )
         resp.raise_for_status()
+        done = 0
         with open(dest, "wb") as out:
             for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    out.write(chunk)
+                if not chunk:
+                    continue
+                out.write(chunk)
+                done += len(chunk)
+                if on_progress:
+                    on_progress(dest, done, f.size)
+        if on_progress:
+            on_progress(dest, done, f.size)
         downloaded.append(dest)
     return downloaded, skipped

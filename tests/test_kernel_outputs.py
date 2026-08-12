@@ -11,6 +11,7 @@ from kaggle_switch.kernel_outputs import (
     KernelOutputError,
     OutputFile,
     download_files,
+    fetch_sizes,
     list_output_files,
 )
 
@@ -108,9 +109,10 @@ class TestListOutputFiles:
 
 
 class FakeResponse:
-    def __init__(self, status=200, chunks=(b"ab", b"cd")):
+    def __init__(self, status=200, chunks=(b"ab", b"cd"), headers=None):
         self.status_code = status
         self._chunks = chunks
+        self.headers = headers or {}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -121,13 +123,20 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, status=200):
+    def __init__(self, status=200, headers=None, chunks=(b"ab", b"cd")):
         self.status = status
+        self.headers = headers or {}
+        self.chunks = chunks
         self.urls: list = []
+        self.head_urls: list = []
 
     def get(self, url, **kwargs):
         self.urls.append(url)
-        return FakeResponse(status=self.status)
+        return FakeResponse(status=self.status, chunks=self.chunks)
+
+    def head(self, url, **kwargs):
+        self.head_urls.append(url)
+        return FakeResponse(status=self.status, chunks=(), headers=self.headers)
 
 
 class TestDownloadFiles:
@@ -219,3 +228,107 @@ class TestModuleGuards:
                 download_files(
                     [OutputFile(path="a.csv", url="http://u/a")], tmp_path
                 )
+
+
+class TestFetchSizes:
+    def test_sets_sizes_from_content_length(self):
+        files = [
+            OutputFile(path="a.csv", url="http://u/a"),
+            OutputFile(path="b.csv", url="http://u/b"),
+        ]
+        session = FakeSession(headers={"Content-Length": "1024"})
+
+        fetch_sizes(files, session=session)
+
+        assert files[0].size == 1024
+        assert files[1].size == 1024
+        assert session.head_urls == ["http://u/a", "http://u/b"]
+
+    def test_ignores_failures_and_missing_length(self):
+        files = [
+            OutputFile(path="a.csv", url="http://u/a"),
+            OutputFile(path="b.csv", url="http://u/b"),
+            OutputFile(path="c.log", url=None),
+        ]
+        session = FakeSession(status=403)
+
+        fetch_sizes(files, session=session)
+
+        assert files[0].size is None
+        assert files[1].size is None
+        assert files[2].size is None
+        assert "http://u/b" in session.head_urls
+        assert len(session.head_urls) == 2
+
+    def test_empty_list_no_requests(self):
+        fetch_sizes([], session=FakeSession())
+        assert True
+
+
+class TestDownloadProgress:
+    def test_on_progress_reports_chunks_and_final(self, tmp_path):
+        files = [OutputFile(path="a.csv", url="http://u/a", size=4)]
+        calls = []
+        download_files(
+            files, tmp_path, session=FakeSession(),
+            on_progress=lambda dest, done, total: calls.append((done, total)),
+        )
+        assert calls == [(2, 4), (4, 4), (4, 4)]
+
+    def test_on_progress_unknown_size(self, tmp_path):
+        files = [OutputFile(path="a.csv", url="http://u/a")]
+        calls = []
+        download_files(
+            files, tmp_path, session=FakeSession(),
+            on_progress=lambda dest, done, total: calls.append((done, total)),
+        )
+        assert calls == [(2, None), (4, None), (4, None)]
+
+    def test_on_progress_log_entry(self, tmp_path):
+        files = [OutputFile(path="slug.log", url=None, log_text="log line")]
+        calls = []
+        download_files(
+            files, tmp_path, session=FakeSession(),
+            on_progress=lambda dest, done, total: calls.append((done, total)),
+        )
+        assert calls == [(8, 8)]
+
+
+class TestModuleGuards2:
+    def test_fetch_sizes_requests_missing_raises(self):
+        from unittest.mock import patch
+
+        original_import = __import__
+
+        def fail_requests(name, *args, **kwargs):
+            if name == "requests":
+                raise ImportError("missing")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fail_requests):
+            with pytest.raises(KernelOutputError, match="requests"):
+                fetch_sizes([OutputFile(path="a.csv", url="http://u/a")])
+
+    def test_download_skips_empty_chunk(self, tmp_path):
+        files = [OutputFile(path="a.csv", url="http://u/a", size=4)]
+        calls = []
+        download_files(
+            files, tmp_path, session=FakeSession(chunks=(b"", b"ab")),
+            on_progress=lambda dest, done, total: calls.append((done, total)),
+        )
+        assert (tmp_path / "a.csv").read_bytes() == b"ab"
+        assert calls == [(2, 4), (2, 4)]
+
+
+class RaisingHeadSession(FakeSession):
+    def head(self, url, **kwargs):
+        raise OSError("no head support")
+
+
+class TestFetchSizesErrors:
+    def test_ignores_head_exceptions(self):
+        files = [OutputFile(path="a.csv", url="http://u/a")]
+
+        fetch_sizes(files, session=RaisingHeadSession())
+
+        assert files[0].size is None

@@ -5,6 +5,7 @@ import json as _json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from rich.table import Table
@@ -762,6 +763,13 @@ def _select_output_files(files: list, slug: str) -> list:
     by_path = {f.path: f for f in all_files}
     log_entry = next((f for f in files if not f.url and f.log_text), None)
 
+    if not sys.stdin.isatty():
+        console.print(err(
+            "Interactive selection needs a terminal \u2014 use [bold]-a/--all[/] "
+            "to download everything."
+        ))
+        return []
+
     def _children(prefix: str) -> tuple[list[str], list[str]]:
         subdirs: set[str] = set()
         leaves: list[str] = []
@@ -899,9 +907,104 @@ def _pick_kernel_interactive(config: dict) -> str | None:
     return kernels[idx].ref
 
 
+def _fmt_bytes(n: int | None) -> str:
+    """Format a byte count for display; None renders as '?'."""
+    if n is None:
+        return "?"
+    size = float(n)
+    units = ("B", "KB", "MB", "GB", "TB")
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} B"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+
+def _render_output_tree(files: list, ref: str) -> None:
+    """Print the output structure as a Rich Tree with file sizes."""
+    from rich.tree import Tree
+
+    known = [f.size for f in files if f.size is not None]
+    total = sum(known)
+    label = f"outputs: [cyan]{ref}[/] \u00b7 {len(files)} file(s)"
+    if known:
+        label += f" \u00b7 [green]{_fmt_bytes(total)}[/]"
+    tree = Tree(label, guide_style="dim")
+    nodes: dict[str, object] = {"": tree}
+    for f in sorted(files, key=lambda f: f.path):
+        parts = f.path.split("/")
+        parent = nodes[""]
+        current = ""
+        for part in parts[:-1]:
+            current = f"{current}{part}/"
+            if current not in nodes:
+                nodes[current] = parent.add(f"[cyan]{part}/[/]")
+            parent = nodes[current]
+        size_hint = f.size if f.url else (len(f.log_text.encode()) if f.log_text else None)
+        parent.add(f"{parts[-1]}  [dim]{_fmt_bytes(size_hint)}[/]")
+    console.print(tree)
+
+
+def _download_with_progress(
+    selected: list, target: Path, force: bool
+) -> tuple[list, int, int]:
+    """Download selected files, showing a live progress bar on TTYs.
+
+    Returns (downloaded, skipped, total_bytes).
+    """
+    from ..kernel_outputs import download_files
+
+    if sys.stdout.isatty():
+        from rich.progress import (
+            BarColumn,
+            DownloadColumn,
+            Progress,
+            TextColumn,
+            TransferSpeedColumn,
+        )
+
+        done_map: dict[str, int] = {}
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            console=console,
+        ) as progress:
+            task_ids = {f.path: progress.add_task(f.path, total=f.size) for f in selected}
+
+            def on_progress(dest: Path, done: int, total: int | None) -> None:
+                rel = str(dest.relative_to(target))
+                tid = task_ids.get(rel)
+                if tid is not None:
+                    progress.update(tid, completed=done, total=total)
+                    done_map[rel] = max(done_map.get(rel, 0), done)
+
+            downloaded, skipped = download_files(
+                selected, target, force=force, on_progress=on_progress
+            )
+        return downloaded, skipped, sum(done_map.values())
+
+    total_bytes = 0
+
+    def on_progress(dest: Path, done: int, total: int | None) -> None:
+        nonlocal total_bytes
+        total_bytes = max(total_bytes, done)
+
+    downloaded, skipped = download_files(
+        selected, target, force=force, on_progress=on_progress
+    )
+    return downloaded, skipped, total_bytes
+
+
 def _kernel_output_flow(config: dict, args: dict) -> int:
     """List, select and download outputs for a resolved kernel ref."""
-    from ..kernel_outputs import KernelOutputError, download_files, list_output_files
+    from ..kernel_outputs import (
+        KernelOutputError,
+        fetch_sizes,
+        list_output_files,
+    )
 
     ref = args["ref"]
     parts = ref.split("/")
@@ -926,21 +1029,42 @@ def _kernel_output_flow(config: dict, args: dict) -> int:
         console.print(err(f"No output files found for [bold]{ref}[/]"))
         return 1
 
+    with display._tty_status(f"[bold green]Reading file sizes for [cyan]{ref}[/]..."):
+        try:
+            fetch_sizes(files)
+        except KernelOutputError as e:
+            console.print(f"[red]\u2718 {e}[/]")
+            return 1
+
+    _render_output_tree(files, ref)
+    console.print()
+
     selected = _select_output_files(files, slug)
     if not selected:
         return 1
 
     target.mkdir(parents=True, exist_ok=True)
-    with display._tty_status(f"[bold green]Downloading {len(selected)} file(s) to [cyan]{target}[/]..."):
-        try:
-            downloaded, skipped = download_files(selected, target, force=args["force"])
-        except KernelOutputError as e:
-            console.print(f"[red]\u2718 {e}[/]")
-            return 1
+    t0 = time.monotonic()
+    try:
+        downloaded, skipped, total_bytes = _download_with_progress(
+            selected, target, args["force"]
+        )
+    except KernelOutputError as e:
+        console.print(f"[red]\u2718 {e}[/]")
+        return 1
+    elapsed = time.monotonic() - t0
 
-    console.print(ok(f"Downloaded {len(downloaded)} file(s) to [cyan]{target}[/]"))
+    lines = [ok(f"Downloaded {len(downloaded)} file(s)"), ""]
+    if total_bytes:
+        lines.append(f"  Size: [cyan]{_fmt_bytes(total_bytes)}[/]")
+    lines.append(f"  Time: [cyan]{elapsed:.1f}s[/]")
     if skipped:
-        console.print(f"[{C_WARN}]Skipped {skipped} file(s) \u2014 use [bold]--force[/] to overwrite[/]")
+        lines.append(
+            f"[{C_WARN}]\u26a0 Skipped {skipped} file(s) \u2014 "
+            f"use [bold]--force[/] to overwrite[/]"
+        )
+    lines.append(f"  Path: [cyan]{target}[/]")
+    console.print(card(lines, title="Output download"))
     return 0
 
 

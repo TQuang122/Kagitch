@@ -1120,6 +1120,11 @@ def _tty_status_factory(msg=""):
 
 
 class TestCmdKernelOutput:
+    @pytest.fixture(autouse=True)
+    def _tty_and_no_sizes(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.fetch_sizes", lambda files, **kw: None)
+
     def test_help(self, capsys):
         rc = kn.cmd_kernel_output({"accounts": {}}, ["--help"])
         out = capsys.readouterr().out
@@ -1351,6 +1356,10 @@ def _patch_browse(monkeypatch, tmp_path, kernels, select_result):
 
 
 class TestBrowseKernelOutput:
+    @pytest.fixture(autouse=True)
+    def _tty_and_no_sizes(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.fetch_sizes", lambda files, **kw: None)
 
     def test_account_cancel_returns_1(self, monkeypatch):
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
@@ -1392,6 +1401,11 @@ class TestBrowseKernelOutput:
 
 
 class TestKernelOutputCoverage:
+    @pytest.fixture(autouse=True)
+    def _tty_and_no_sizes(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.fetch_sizes", lambda files, **kw: None)
+
     def test_all_mode_timeout(self, capsys, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
         monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
@@ -1450,3 +1464,183 @@ class TestKernelOutputCoverage:
         rc = kn.cmd_kernel_output({"accounts": {}}, [])
 
         assert rc == 0
+
+
+class TestKernelOutputUI:
+    @pytest.fixture(autouse=True)
+    def _tty_and_no_sizes(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.fetch_sizes", lambda files, **kw: None)
+
+    def test_fmt_bytes(self):
+        assert kn._fmt_bytes(None) == "?"
+        assert kn._fmt_bytes(0) == "0 B"
+        assert kn._fmt_bytes(1023) == "1023 B"
+        assert kn._fmt_bytes(1024) == "1.0 KB"
+        assert kn._fmt_bytes(1536) == "1.5 KB"
+        assert kn._fmt_bytes(5 * 1024 * 1024) == "5.0 MB"
+
+    def test_tree_rendered_before_selection(self, capsys, monkeypatch, tmp_path):
+        """Output structure is shown as a tree with sizes before selection."""
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs.list_output_files",
+            lambda o, s, **kw: [OutputFile(path="data/train.csv", url="http://u/a", size=2048)],
+        )
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["data/train.csv"]))
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files",
+                            lambda f, t, **kw: ([t / "data/train.csv"], 0))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 0
+        out = _plain(capsys.readouterr().out)
+        assert "outputs: owner/slug" in out
+        assert "data/" in out
+        assert "train.csv" in out
+        assert "2.0 KB" in out
+        assert "Output download" in out
+
+    def test_non_tty_stdin_degradation(self, capsys, monkeypatch, tmp_path):
+        """Interactive selection refuses to run without a terminal."""
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs.list_output_files",
+            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")],
+        )
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 1
+        assert "needs a terminal" in _plain(capsys.readouterr().out)
+
+    def test_summary_card_with_size(self, capsys, monkeypatch, tmp_path):
+        """Summary card shows total bytes reported through on_progress."""
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs.list_output_files",
+            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a", size=512)],
+        )
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["a.csv"]))
+
+        def fake_download(files, target, *, force=False, on_progress=None, **kw):
+            dest = target / "a.csv"
+            if on_progress:
+                on_progress(dest, 512, 512)
+            return ([dest], 0)
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files", fake_download)
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 0
+        out = _plain(capsys.readouterr().out)
+        assert "Size:" in out
+        assert "512 B" in out
+
+
+class TestKernelOutputUIExtra:
+    @pytest.fixture(autouse=True)
+    def _tty_and_no_sizes(self, monkeypatch):
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.fetch_sizes", lambda files, **kw: None)
+
+    def test_empty_choices_returns_empty(self, monkeypatch):
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        result = kn._select_output_files(
+            [OutputFile(path="x.log", url=None, log_text="")], "slug"
+        )
+        assert result == []
+
+    def test_drill_cancel_propagates(self, capsys, monkeypatch, tmp_path):
+        """Cancelling inside a drilled-in folder aborts the whole selection."""
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs.list_output_files",
+            lambda o, s, **kw: [OutputFile(path="data/b.csv", url="http://u/b")],
+        )
+        checkbox_answers = iter([["[dir] data/"], None])
+
+        def fake_checkbox(*a, **kw):
+            return SimpleNamespace(ask=lambda: next(checkbox_answers))
+
+        monkeypatch.setattr("questionary.checkbox", fake_checkbox)
+        monkeypatch.setattr("questionary.select",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: "Pick files..."))
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 1
+        assert "Cancelled" in _plain(capsys.readouterr().out)
+
+    def test_tty_progress_path(self, capsys, monkeypatch, tmp_path):
+        """TTY stdout uses the live Progress bar and reports bytes."""
+        from kaggle_switch.kernel_outputs import OutputFile
+
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs.list_output_files",
+            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a", size=512)],
+        )
+        monkeypatch.setattr("questionary.checkbox",
+                            lambda *a, **kw: SimpleNamespace(ask=lambda: ["a.csv"]))
+
+        def fake_download(files, target, *, force=False, on_progress=None, **kw):
+            dest = target / "a.csv"
+            if on_progress:
+                on_progress(dest, 512, 512)
+            return ([dest], 0)
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.download_files", fake_download)
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 0
+        out = _plain(capsys.readouterr().out)
+        assert "Downloaded 1 file(s)" in out
+        assert "512 B" in out
+
+    def test_fetch_sizes_error_returns_1(self, capsys, monkeypatch, tmp_path):
+        """A failed size fetch aborts with a friendly message."""
+        from kaggle_switch.kernel_outputs import KernelOutputError, OutputFile
+
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", _tty_status_factory)
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs.list_output_files",
+            lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")],
+        )
+
+        def boom(files, **kw):
+            raise KernelOutputError("sizes failed")
+
+        monkeypatch.setattr("kaggle_switch.kernel_outputs.fetch_sizes", boom)
+
+        rc = kn.cmd_kernel_output({"accounts": {}}, ["owner/slug"])
+
+        assert rc == 1
+        assert "sizes failed" in _plain(capsys.readouterr().out)
