@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.3] - 2026-08-13
 
 ### Fixed
 - `kagitch kernel logs` now repairs Vietnamese/UTF-8 text that arrives decoded as Latin-1/cp1252 from the kaggle SSE stream (`Tá»ng` → `Tổng`).
