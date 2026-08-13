@@ -88,14 +88,15 @@ def fetch_sizes(files: list[OutputFile], *, session=None, max_workers: int = 8) 
     targets = [f for f in files if f.url]
     if not targets:
         return
-    try:
-        import requests
-    except ImportError as e:
-        raise KernelOutputError(
-            "requests is required to download files. Install with: pip install kaggle"
-        ) from e
-
-    sess = session if session is not None else requests.Session()
+    sess = session
+    if sess is None:
+        try:
+            import requests
+        except ImportError as e:
+            raise KernelOutputError(
+                "requests is required to download files. Install with: pip install kaggle"
+            ) from e
+        sess = requests.Session()
 
     def _head(f: OutputFile) -> None:
         try:
@@ -124,15 +125,16 @@ def download_files(
     *on_progress* is called per chunk and once more with the final
     byte count.
     """
-    try:
-        import requests
-    except ImportError as e:
-        raise KernelOutputError(
-            "requests is required to download files. Install with: pip install kaggle"
-        ) from e
-
     target = Path(target_dir)
-    sess = session if session is not None else requests.Session()
+    sess = session
+    if sess is None:
+        try:
+            import requests
+        except ImportError as e:
+            raise KernelOutputError(
+                "requests is required to download files. Install with: pip install kaggle"
+            ) from e
+        sess = requests.Session()
     downloaded: list[Path] = []
     skipped = 0
     for f in files:
