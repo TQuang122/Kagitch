@@ -1035,7 +1035,7 @@ class TestBrowseKernelLogs:
         assert rc == 0
         assert "testacc" in captured["kwargs"]["title"]
         assert "1 kernels" in captured["kwargs"]["title"]
-        assert "lọc" in captured["kwargs"]["footer"]
+        assert "filter" in captured["kwargs"]["footer"]
 
     def test_terminal_select_returns_none(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))

@@ -677,6 +677,13 @@ def _tree_visible(
     return visible
 
 
+def _all_leaf_paths(items: list[TreeItem]) -> list[str]:
+    paths: list[str] = []
+    for it in items:
+        paths.extend(_leaf_paths(it))
+    return paths
+
+
 def _leaf_paths(item: TreeItem) -> list[str]:
     paths: list[str] = []
 
@@ -831,6 +838,12 @@ def _terminal_tree_select_unix(
             elif ch == " ":
                 _, item, _ = visible[sel]
                 checked = _toggle(item, checked)
+            elif ch in ("a", "A"):
+                leaves = _all_leaf_paths(items)
+                if all(p in checked for p in leaves):
+                    checked = set()
+                else:
+                    checked = set(leaves)
             elif ch == "\x03":
                 raise KeyboardInterrupt
             elif ch in ("q",):
@@ -901,6 +914,12 @@ def _terminal_tree_select_win(
             elif ch == b" ":
                 _, item, _ = visible[sel]
                 checked = _toggle(item, checked)
+            elif ch in (b"a", b"A"):
+                leaves = _all_leaf_paths(items)
+                if all(p in checked for p in leaves):
+                    checked = set()
+                else:
+                    checked = set(leaves)
             elif ch == b"\x03":
                 raise KeyboardInterrupt
             elif ch in (b"q", b"Q"):

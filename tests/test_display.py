@@ -1042,11 +1042,11 @@ class TestTreeHelpers:
         visible = display._tree_visible(items, {"data"})
         lines = display._build_tree_lines(
             items, {"data"}, {"data/b.csv"}, visible, sel=1,
-            title="outputs: t", footer="q thoát",
+            title="outputs: t", footer="q quit",
         )
         text = "\n".join(lines)
         assert "outputs: t" in text
-        assert "q thoát" in text
+        assert "q quit" in text
         assert "\u276f" in lines[3]  # cursor marker on b.csv row
         assert "[✓]" in text
         assert "[-]" in text  # data dir partial
@@ -1099,6 +1099,12 @@ class TestTreeSelectUnix:
     def test_right_then_left_collapse(self, capsys):
         assert self._run(["\x1b", "[", "C", "\x1b", "[", "D", "\r"], capsys) == set()
 
+    def test_a_selects_all(self, capsys):
+        assert self._run(["a", "\r"], capsys) == {"a.csv", "data/b.csv", "data/sub/c.csv", "slug.log"}
+
+    def test_a_toggles_off(self, capsys):
+        assert self._run(["a", "a", "\r"], capsys) == set()
+
     def test_q_cancels(self, capsys):
         assert self._run(["q"], capsys) is None
 
@@ -1133,6 +1139,12 @@ class TestTreeSelectWin:
 
     def test_left_collapse(self):
         assert self._run([b"\xe0", b"M", b"\xe0", b"K", b"\r"]) == set()
+
+    def test_a_selects_all(self):
+        assert self._run([b"a", b"\r"]) == {"a.csv", "data/b.csv", "data/sub/c.csv", "slug.log"}
+
+    def test_a_toggles_off(self):
+        assert self._run([b"a", b"a", b"\r"]) == set()
 
     def test_q_cancels(self):
         assert self._run([b"q"]) is None

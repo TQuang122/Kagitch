@@ -623,8 +623,7 @@ def _browse_kernel_logs(config: dict) -> int:
         kernel_options,
         filterable=True,
         title=f"Kernels for {acc.name} \u00b7 {len(kernels)} kernels",
-        footer="g\u00f5 \u0111\u1ec3 l\u1ecdc \u00b7 \u2191\u2193 ch\u1ecdn \u00b7 "
-        "Enter ch\u1ecdn \u00b7 q tho\u00e1t",
+        footer="type to filter \u00b7 \u2191\u2193 move \u00b7 Enter select \u00b7 q quit",
     )
     if idx is None:
         console.print(info("Cancelled."))
@@ -763,8 +762,8 @@ def _select_output_files(files: list, ref: str) -> list:
     checked = display._terminal_tree_select(
         root,
         title=f"outputs: {ref} \u00b7 {len(files)} file(s)",
-        footer="\u2191\u2193 ch\u1ecdn \u00b7 \u2192 m\u1edf \u00b7 \u2190 g\u1eadp \u00b7 "
-        "space ch\u1ecdn \u00b7 Enter xong \u00b7 q tho\u00e1t",
+        footer="\u2191\u2193 move \u00b7 \u2192 open \u00b7 \u2190 close \u00b7 "
+        "space toggle \u00b7 a select/deselect all \u00b7 Enter done \u00b7 q quit",
     )
     if checked is None:
         console.print(info("Cancelled."))
@@ -795,8 +794,7 @@ def _pick_kernel_interactive(config: dict) -> str | None:
         kernel_options,
         filterable=True,
         title=f"Kernels for {acc.name} \u00b7 {len(kernels)} kernels",
-        footer="g\u00f5 \u0111\u1ec3 l\u1ecdc \u00b7 \u2191\u2193 ch\u1ecdn \u00b7 "
-        "Enter ch\u1ecdn \u00b7 q tho\u00e1t",
+        footer="type to filter \u00b7 \u2191\u2193 move \u00b7 Enter select \u00b7 q quit",
     )
     if idx is None:
         console.print(info("Cancelled."))
