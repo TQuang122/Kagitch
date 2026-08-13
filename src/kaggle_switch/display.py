@@ -739,7 +739,6 @@ def _build_tree_lines(
     footer: str,
 ) -> list[str]:
     """Build ANSI display lines for the interactive tree picker."""
-    term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
     lines: list[str] = []
 
     if title:
