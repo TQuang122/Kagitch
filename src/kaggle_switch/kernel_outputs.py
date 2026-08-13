@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 _HAS_SDK = False
+KaggleClient = None  # type: ignore[assignment]
 try:
     from kagglesdk import KaggleClient
 
