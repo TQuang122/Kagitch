@@ -44,7 +44,7 @@ def main() -> int:
 def _main() -> int:
     from rich.traceback import install as _install_tb
 
-    _install_tb(show_locals=True, width=None)
+    _install_tb(show_locals=False, width=None)
 
     config = load_config()
     args = sys.argv[1:]

@@ -7,6 +7,11 @@
 - Kernel output UI: output structure rendered as a tree with per-file sizes (parallel HEAD requests), live progress bar with speed on TTYs, and a download summary card (size, time, skipped count). Non-TTY stdin degrades gracefully with a hint to use `-a/--all`.
 - `kagitch kernel output` file selection is now a single interactive tree: arrow keys navigate, right/left expand and collapse directories, space toggles a file or an entire directory subtree (with partial-state markers), Enter confirms and `q`/Ctrl-C cancels. Cross-platform raw-terminal key handling (termios on Unix, msvcrt on Windows).
 - Kernel picker in `kernel output`/`kernel logs` browse mode: the full-width Rich table is gone; the interactive selector now lists slug-only rows with status colors, supports type-to-filter (substring, case-insensitive, Backspace to edit) and shows a `Kernels for <account> · N kernels` header. The output file tree picker adds an `a` key to select or deselect all files; selector footers are now in English. Kernel status colors render in the raw selector (green COMPLETE, red ERROR, yellow RUNNING, magenta CANCEL_ACKNOWLEDGED, cyan QUEUED/PENDING) - fixed an ANSI-stripping bug in the selector renderer.
+### Security & reliability
+- Account names are now validated (`[A-Za-z0-9._-]` only) in `add`/`rename` - blocks path traversal (`..`/`/`) that could point `kagitch remove` at arbitrary directories, and shell metacharacters that could inject into the eval-based shell wrapper.
+- `kagitch update` git calls now have timeouts (30-60s) and report friendly errors instead of hanging forever; `_git_log` fails gracefully.
+- The kagglesdk quota call in `kagitch check` now runs under a 15s hard timeout - a stalled SDK can no longer hang the whole check.
+- The global traceback hook no longer dumps local variables (`show_locals=False`), avoiding accidental token/credential disclosure in tracebacks.
 
 ### Changed
 - `kaggle quota` fallback now parses `--format json` output first (kaggle CLI >= 2.2.3), keeping the plain-text parser only for older CLIs.

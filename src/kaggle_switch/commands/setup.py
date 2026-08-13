@@ -143,11 +143,14 @@ def cmd_completions(args: list[str]) -> int:
 
 
 def _git_log(*args: str, cwd: Path) -> str:
-    cp = subprocess.run(
-        ["git", *args],
-        capture_output=True, text=True,
-        cwd=cwd,
-    )
+    try:
+        cp = subprocess.run(
+            ["git", *args],
+            capture_output=True, text=True,
+            cwd=cwd, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
     return cp.stdout.strip()
 
 
@@ -174,20 +177,27 @@ def cmd_update() -> int:
 
     old_hash, old_subj = _git_head(cwd=root)
 
-    if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
-        console.print(f"[bold]Kagitch {__version__} -- updating...[/]")
-        cp = subprocess.run(
-            ["git", "pull", "--ff-only"],
-            capture_output=True, text=True,
-            cwd=root,
-        )
-    else:
-        with console.status(f"[bold]Kagitch {__version__} -- pulling latest...[/]") as _:
+    try:
+        if os.environ.get("KAGITCH_SHELL_WRAPPER") == "1":
+            console.print(f"[bold]Kagitch {__version__} -- updating...[/]")
             cp = subprocess.run(
                 ["git", "pull", "--ff-only"],
                 capture_output=True, text=True,
-                cwd=root,
+                cwd=root, timeout=60,
             )
+        else:
+            with console.status(f"[bold]Kagitch {__version__} -- pulling latest...[/]") as _:
+                cp = subprocess.run(
+                    ["git", "pull", "--ff-only"],
+                    capture_output=True, text=True,
+                    cwd=root, timeout=60,
+                )
+    except subprocess.TimeoutExpired:
+        console.print(err("git pull timed out after 60s - check your network."))
+        return 1
+    except FileNotFoundError:
+        console.print(err("git not found on PATH."))
+        return 1
 
     if cp.returncode != 0:
         console.print(card([

@@ -945,6 +945,8 @@ class TestCheckQuotaSDKFullFlow:
         m.setattr("kaggle_switch.checker._swap_creds", lambda _: None)
         m.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
 
+        from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         checker.KaggleClient = MagicMock(return_value=mock_client)
 
@@ -992,6 +994,8 @@ class TestCheckQuotaSDKFullFlow:
         m.setattr("kaggle_switch.checker._HAS_SDK", True)
         m.setattr("kaggle_switch.checker._swap_creds", lambda _: None)
         m.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
+
+        from unittest.mock import MagicMock
 
         mock_client = MagicMock()
         checker.KaggleClient = MagicMock(return_value=mock_client)
@@ -1045,6 +1049,8 @@ class TestCheckQuotaSDKFullFlow:
         m.setattr("kaggle_switch.checker._HAS_SDK", True)
         m.setattr("kaggle_switch.checker._swap_creds", lambda _: None)
         m.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
+
+        from unittest.mock import MagicMock
 
         mock_client = MagicMock()
         checker.KaggleClient = MagicMock(return_value=mock_client)
@@ -1115,6 +1121,8 @@ class TestCheckQuotaSDKFullFlow:
         m.setattr("kaggle_switch.checker._swap_creds", lambda _: None)
         m.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
 
+        from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         checker.KaggleClient = MagicMock(return_value=mock_client)
 
@@ -1168,6 +1176,8 @@ class TestCheckQuotaSDKFullFlow:
         m.setattr("kaggle_switch.checker._HAS_SDK", True)
         m.setattr("kaggle_switch.checker._swap_creds", lambda _: None)
         m.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
+
+        from unittest.mock import MagicMock
 
         mock_client = MagicMock()
         checker.KaggleClient = MagicMock(return_value=mock_client)
@@ -1242,6 +1252,8 @@ class TestCheckQuotaSDKFullFlow:
         m.setattr("kaggle_switch.checker._swap_creds", lambda _: None)
         m.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
 
+        from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         checker.KaggleClient = MagicMock(return_value=mock_client)
 
@@ -1287,6 +1299,8 @@ class TestCheckQuotaSDKFullFlow:
         # DO NOT mock _swap_creds -- let it copy the file
         m.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
 
+        from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         checker.KaggleClient = MagicMock(return_value=mock_client)
 
@@ -1317,3 +1331,40 @@ class TestCheckQuotaSDKFullFlow:
         assert gpu == "1.00h"
         # The swapped-in credentials.json should be removed by finally block
         assert not (kd / "credentials.json").exists()
+
+
+class TestQuotaSdkTimeout:
+    def test_sdk_timeout_returns_error(self, monkeypatch, tmp_path):
+        """A stalled kagglesdk quota call fails fast instead of hanging."""
+        import time as _time
+
+        kd = tmp_path / ".kaggle"
+        kd.mkdir(parents=True)
+        (kd / "credentials.json").write_text(json.dumps({
+            "access_token": "KGAT_test",
+            "access_token_expiration": (
+                datetime.now() + timedelta(hours=1)
+            ).isoformat(),
+        }))
+        monkeypatch.setattr("kaggle_switch.config.KAGGLE_DEFAULT", kd)
+        monkeypatch.setattr("kaggle_switch.checker.KAGGLE_DEFAULT", kd)
+        monkeypatch.setattr("kaggle_switch.checker._HAS_SDK", True)
+        monkeypatch.setattr("kaggle_switch.checker._swap_creds", lambda _: None)
+        monkeypatch.setattr("kaggle_switch.checker._patch_creds_expiry", lambda: None)
+        monkeypatch.setattr("kaggle_switch.checker._SDK_TIMEOUT", 0.05)
+
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+
+        def slow_quota():
+            _time.sleep(0.5)
+
+        mock_client.kernels.kernels_api_client.get_accelerator_quota_statistics.side_effect = slow_quota
+        checker.KaggleClient = MagicMock(return_value=mock_client)
+
+        acc = Account(number="40", name="slow-sdk", config_dir="slow-sdk")
+        gpu, tpu, refresh, ok, err = _check_quota_sdk({}, acc)
+
+        assert ok is False
+        assert "timed out" in err

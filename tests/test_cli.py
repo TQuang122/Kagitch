@@ -1820,3 +1820,58 @@ class TestMainBlock:
         with pytest.raises(SystemExit) as exc:
             runpy.run_module("kaggle_switch.cli", run_name="__main__")
         assert exc.value.code == 0
+
+
+class TestAccountNameSafety:
+    def test_add_rejects_unsafe_name(self, temp_env, capsys):
+        rc, out = run_cli("add", "../evil", "/nonexistent/kaggle.json", capsys=capsys)
+        assert rc == 1
+        assert "letters, digits" in out
+
+    def test_add_rejects_dotdot_name(self, temp_env, capsys):
+        rc, out = run_cli("add", "..", "/nonexistent/kaggle.json", capsys=capsys)
+        assert rc == 1
+        assert "letters, digits" in out
+
+    def test_rename_rejects_unsafe_name(self, temp_env, capsys):
+        config = cfg.load_config()
+        config["accounts"] = {"1": {"name": "alpha", "config_dir": ""}}
+        cfg.save_config(config)
+        rc, out = run_cli("rename", "1", "../evil", capsys=capsys)
+        assert rc == 1
+        assert "letters, digits" in out
+        assert cfg.load_config()["accounts"]["1"]["name"] == "alpha"
+
+    def test_update_git_timeout_returns_1(self, temp_env, capsys, monkeypatch):
+        """kagitch update reports a friendly error when git pull hangs."""
+        monkeypatch.setattr(
+            "kaggle_switch.commands.setup.subprocess.run",
+            lambda cmd, **kw: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(cmd="git pull --ff-only", timeout=60)
+            ),
+        )
+        rc, out = run_cli("update", capsys=capsys)
+        assert rc == 1
+        assert "timed out" in out
+
+    def test_show_locals_disabled(self, temp_env, capsys, monkeypatch):
+        """cli installs the traceback hook without local-variable dumping."""
+        captured = {}
+        monkeypatch.setattr(
+            "rich.traceback.install",
+            lambda **kw: captured.update(kw),
+        )
+        rc, out = run_cli("--version", capsys=capsys)
+        assert rc == 0
+        assert captured.get("show_locals") is False
+
+
+class TestUpdateGitNotFound:
+    def test_update_git_missing_returns_1(self, temp_env, capsys, monkeypatch):
+        monkeypatch.setattr(
+            "kaggle_switch.commands.setup.subprocess.run",
+            lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()),
+        )
+        rc, out = run_cli("update", capsys=capsys)
+        assert rc == 1
+        assert "git not found" in out

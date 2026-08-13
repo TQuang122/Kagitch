@@ -301,3 +301,34 @@ class TestRemoveAccountEdgeCases:
         assert not acc_dir.exists()
         assert "1" not in config["accounts"]
 
+
+
+class TestValidateAccountName:
+    def test_valid_names(self):
+        for name in ("klinh1912", "thanhquang71", "my-account", "user.name", "a_b", "A1"):
+            assert cfg.validate_account_name(name) is None
+
+    def test_invalid_names(self):
+        for name in ("", ".", "..", "a/b", "a\\b", "a;b", "a b", 'a"b', "a$b", "a`b", "a$(x)"):
+            assert cfg.validate_account_name(name) is not None
+
+
+class TestAccountNameValidation:
+    def test_add_account_rejects_unsafe_name(self, temp_config):
+        with pytest.raises(ValueError, match="letters, digits"):
+            cfg.add_account({"accounts": {}}, "../.ssh")
+
+    def test_add_account_rejects_dotdot(self, temp_config):
+        with pytest.raises(ValueError, match="letters, digits"):
+            cfg.add_account({"accounts": {}}, "..")
+
+    def test_rename_account_rejects_unsafe_name(self, temp_config):
+        config = {"accounts": {"1": {"name": "alpha", "config_dir": "alpha"}}}
+        with pytest.raises(ValueError, match="letters, digits"):
+            cfg.rename_account(config, "1", "../evil")
+
+    def test_rename_keeps_old_name_on_reject(self, temp_config):
+        config = {"accounts": {"1": {"name": "alpha", "config_dir": "alpha"}}}
+        with pytest.raises(ValueError):
+            cfg.rename_account(config, "1", "bad/name")
+        assert config["accounts"]["1"]["name"] == "alpha"

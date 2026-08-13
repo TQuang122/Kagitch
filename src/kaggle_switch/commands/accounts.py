@@ -453,7 +453,7 @@ def cmd_rename(config: dict, args: list[str]) -> int:
         acc = rename_account(config, args[0], args[1])
         console.print(ok(f"Renamed #{acc.number}: {acc.name}"))
         return 0
-    except KeyError as e:
+    except (KeyError, ValueError) as e:
         console.print(err(e.args[0] if e.args else e))
         return 1
 

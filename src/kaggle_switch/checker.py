@@ -15,6 +15,7 @@ from pathlib import Path
 from .config import Account, KAGGLE_DEFAULT, get_accounts, load_config
 
 _OAUTH_TOKEN_URL = "https://www.kaggle.com/api/v1/oauth2/token"
+_SDK_TIMEOUT = 15  # seconds for the kagglesdk quota call
 
 
 # ── kagglesdk import guard ─────────────────────────────────────
@@ -273,7 +274,16 @@ def _check_quota_sdk(
             if client is None:
                 return ("", "", "", False, "no credentials found")
 
-            resp = client.kernels.kernels_api_client.get_accelerator_quota_statistics()
+            from concurrent.futures import ThreadPoolExecutor
+            from concurrent.futures import TimeoutError as FutureTimeout
+
+            try:
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    resp = pool.submit(
+                        client.kernels.kernels_api_client.get_accelerator_quota_statistics
+                    ).result(timeout=_SDK_TIMEOUT)
+            except FutureTimeout:
+                return ("", "", "", False, "quota SDK timed out")
 
             gpu_q = resp.gpu_quota
             tpu_q = resp.tpu_quota

@@ -3,12 +3,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import keychain
+
+_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validate_account_name(name: str) -> str | None:
+    """Return an error message if *name* is unsafe for paths or shells."""
+    if not name:
+        return "Account name cannot be empty"
+    if name in (".", "..") or not _NAME_RE.match(name):
+        return (
+            "Account name may only contain letters, digits, '.', '_', '-'"
+            f" (got {name!r})"
+        )
+    return None
 
 
 def _config_dir() -> Path:
@@ -160,6 +175,10 @@ def add_account(config: dict, name: str, source: str | Path | None = None, auth_
         if acc["name"] == name:
             raise ValueError(f"Account '{name}' already exists as #{n}")
 
+    name_error = validate_account_name(name)
+    if name_error:
+        raise ValueError(name_error)
+
     next_n = _next_account_number(config)
     target_dir = Path.home() / f".kaggle-{name}"
     is_token = False
@@ -220,6 +239,9 @@ def rename_account(config: dict, key: str, new_name: str) -> Account:
     account = find_account(config, key)
     if account is None:
         raise KeyError(f"Account #{key} not found")
+    name_error = validate_account_name(new_name)
+    if name_error:
+        raise ValueError(name_error)
     config["accounts"][account.number]["name"] = new_name
     save_config(config)
     return Account(number=account.number, name=new_name, config_dir=account.config_dir)
