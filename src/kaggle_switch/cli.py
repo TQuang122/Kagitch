@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import sys
 
-from rich.traceback import Traceback
-
 from . import display
 from .commands import (
     _kernel_init_help,
@@ -36,6 +34,8 @@ def main() -> int:
     try:
         return _main()
     except Exception:
+        from rich.traceback import Traceback
+
         console.print()
         console.print(Traceback(width=None))
         return 1

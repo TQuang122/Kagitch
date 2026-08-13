@@ -12,6 +12,10 @@
 - `kagitch update` git calls now have timeouts (30-60s) and report friendly errors instead of hanging forever; `_git_log` fails gracefully.
 - The kagglesdk quota call in `kagitch check` now runs under a 15s hard timeout - a stalled SDK can no longer hang the whole check.
 - The global traceback hook no longer dumps local variables (`show_locals=False`), avoiding accidental token/credential disclosure in tracebacks.
+### Performance & hardening
+- kagglesdk is now imported lazily (first quota check) instead of on every command - `kagitch --version`/`list` startup dropped from ~0.13s to ~0.09s. `rich.traceback` is also lazily imported.
+- `accounts.json` and rewritten credentials files are chmod'd to 0600 (best-effort, non-Windows).
+- Plaintext-token migration now only removes the token from `accounts.json` when the keychain write actually succeeds - no more silent token loss when keyring is unavailable.
 
 ### Changed
 - `kaggle quota` fallback now parses `--format json` output first (kaggle CLI >= 2.2.3), keeping the plain-text parser only for older CLIs.

@@ -523,7 +523,15 @@ class TestCheckerModuleImport:
     def test_hassdk_defined(self):
         assert hasattr(checker, "_HAS_SDK")
 
-    def test_import_without_sdk_sets_has_sdk_false(self):
+    def test_import_without_sdk_stays_unattempted(self):
+        import importlib
+
+        mod = importlib.reload(checker)
+        assert mod._HAS_SDK is None
+
+        importlib.reload(checker)
+
+    def test_ensure_sdk_returns_false_when_import_blocked(self, monkeypatch):
         original_import = __import__
 
         def fail_kagglesdk_import(name, *args, **kwargs):
@@ -531,16 +539,16 @@ class TestCheckerModuleImport:
                 raise ImportError("missing sdk")
             return original_import(name, *args, **kwargs)
 
+        monkeypatch.setattr("kaggle_switch.checker._HAS_SDK", None)
         with patch("builtins.__import__", side_effect=fail_kagglesdk_import):
-            import importlib
+            assert checker._ensure_sdk() is False
+        assert checker._HAS_SDK is False
 
-            mod = importlib.reload(checker)
-
-        assert mod._HAS_SDK is False
-
-        import importlib
-
-        importlib.reload(checker)
+    def test_ensure_sdk_returns_true_when_available(self, monkeypatch):
+        monkeypatch.setattr("kaggle_switch.checker._HAS_SDK", None)
+        monkeypatch.setattr("kaggle_switch.checker.KaggleClient", None)
+        assert checker._ensure_sdk() is True
+        assert checker._HAS_SDK is True
 
 
 class TestRefreshOAuthToken:
@@ -1368,3 +1376,21 @@ class TestQuotaSdkTimeout:
 
         assert ok is False
         assert "timed out" in err
+
+
+class TestChmod600:
+    def test_chmod_applies_owner_only(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+
+        chmod = MagicMock()
+        monkeypatch.setattr("os.chmod", chmod)
+        path = tmp_path / "credentials.json"
+        checker._chmod_600(path)
+        chmod.assert_called_once_with(path, 0o600)
+
+    def test_chmod_swallows_oserror(self, tmp_path, monkeypatch):
+        def boom(*a, **kw):
+            raise OSError("no chmod")
+
+        monkeypatch.setattr("os.chmod", boom)
+        checker._chmod_600(tmp_path / "credentials.json")  # no raise

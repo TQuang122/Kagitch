@@ -18,18 +18,32 @@ _OAUTH_TOKEN_URL = "https://www.kaggle.com/api/v1/oauth2/token"
 _SDK_TIMEOUT = 15  # seconds for the kagglesdk quota call
 
 
-# ── kagglesdk import guard ─────────────────────────────────────
+# ── kagglesdk lazy import guard ────────────────────────────────
 # kagglesdk >= 0.1.33 (bundled with kaggle CLI >= 2.2.4) fixed the
 # TimeDeltaSerializer whole-second duration crash upstream, so no
-# monkeypatch is needed.  Missing SDK degrades to the kaggle CLI
-# subprocess fallback in the quota check.
-_HAS_SDK = False
-try:
-    from kagglesdk import KaggleClient
+# monkeypatch is needed.  Importing kagglesdk is expensive (~50ms), so
+# it is loaded lazily on the first quota check; missing SDK degrades
+# to the kaggle CLI subprocess fallback.
+_HAS_SDK: bool | None = None  # None = not yet attempted
+KaggleClient = None  # type: ignore[assignment]
 
-    _HAS_SDK = True
-except Exception:
-    pass  # kagglesdk not installed — quota check will fail naturally
+
+def _ensure_sdk() -> bool:
+    """Import kagglesdk on first use; returns whether it is available."""
+    global KaggleClient, _HAS_SDK
+    if _HAS_SDK is True:
+        return True
+    if _HAS_SDK is False:
+        return False
+    try:
+        from kagglesdk import KaggleClient as _kc
+
+        KaggleClient = _kc
+        _HAS_SDK = True
+        return True
+    except Exception:
+        _HAS_SDK = False
+        return False
 # ────────────────────────────────────────────────────────────────
 
 
@@ -88,6 +102,7 @@ def _patch_creds_expiry(path: Path | None = None) -> None:
             # Naive datetime — assume UTC and make it explicit.
             data["access_token_expiration"] = exp.rstrip("Z") + "+00:00"
             creds.write_text(json.dumps(data, indent=2))
+            _chmod_600(creds)
     except (json.JSONDecodeError, OSError):
         pass
 
@@ -146,6 +161,15 @@ def _require_kaggle() -> str | None:
         "kaggle CLI not found on PATH.\n"
         "  Install with:  pip install kaggle"
     )
+
+
+def _chmod_600(path) -> None:
+    """Restrict a credentials file to the owner (best-effort)."""
+    if sys.platform != "win32":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
 
 def _td(td: timedelta | None) -> str:
@@ -208,7 +232,7 @@ def _check_quota_sdk(
 
     Returns (gpu_remaining, tpu_remaining, quota_refresh, ok, error).
     """
-    if not _HAS_SDK:
+    if not _ensure_sdk():
         return ("", "", "", False, "kagglesdk not available")
 
     with _creds_lock:
@@ -253,6 +277,7 @@ def _check_quota_sdk(
                                 creds_file.write_text(
                                     json.dumps(data, indent=2)
                                 )
+                                _chmod_600(creds_file)
                         client = KaggleClient(api_token=token)
                 except (json.JSONDecodeError, OSError, KeyError):
                     pass

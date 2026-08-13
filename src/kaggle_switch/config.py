@@ -82,9 +82,9 @@ def _migrate_plaintext_tokens(config: dict) -> None:
     for _n, acc in config["accounts"].items():
         token = acc.get("api_token", "")
         if token:
-            keychain.store_token(acc["name"], token)
-            del acc["api_token"]
-            changed = True
+            if keychain.store_token(acc["name"], token):
+                del acc["api_token"]
+                changed = True
 
 
 def get_token(account: Account) -> str:
@@ -110,6 +110,11 @@ def save_config(config: dict) -> None:
     _renumber_accounts(config)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(config, indent=2) + "\n")
+    if sys.platform != "win32":
+        try:
+            os.chmod(CONFIG_FILE, 0o600)
+        except OSError:
+            pass
 
 
 def get_accounts(config: dict) -> list[Account]:

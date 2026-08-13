@@ -332,3 +332,31 @@ class TestAccountNameValidation:
         with pytest.raises(ValueError):
             cfg.rename_account(config, "1", "bad/name")
         assert config["accounts"]["1"]["name"] == "alpha"
+
+
+class TestSaveConfigPerms:
+    def test_save_restricts_permissions(self, temp_config, monkeypatch):
+        from unittest.mock import MagicMock
+
+        chmod = MagicMock()
+        monkeypatch.setattr("os.chmod", chmod)
+        cfg.save_config({"accounts": {}})
+        assert chmod.called
+        assert chmod.call_args[0][1] == 0o600
+
+    def test_save_tolerates_chmod_error(self, temp_config, monkeypatch):
+        def boom(*a, **kw):
+            raise OSError("no chmod")
+
+        monkeypatch.setattr("os.chmod", boom)
+        cfg.save_config({"accounts": {}})  # should not raise
+
+
+class TestMigrateKeychainFailure:
+    def test_migrate_keeps_token_when_keychain_fails(self, temp_config, monkeypatch):
+        from kaggle_switch import keychain as kc
+
+        monkeypatch.setattr(kc, "KEYRING_AVAILABLE", False)
+        config = {"accounts": {"1": {"name": "alice", "api_token": "KGAT_secret1"}}}
+        cfg._migrate_plaintext_tokens(config)
+        assert config["accounts"]["1"]["api_token"] == "KGAT_secret1"
