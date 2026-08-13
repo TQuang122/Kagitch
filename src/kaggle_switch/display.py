@@ -43,7 +43,7 @@ def _strip_ansi(text: str) -> str:
 def _fit_plain(text: str, width: int) -> str:
     plain = _strip_ansi(text)
     if len(plain) <= width:
-        return plain
+        return text  # keep ANSI codes when the text fits
     if width <= 1:
         return plain[:width]
     return plain[: width - 1] + "…"

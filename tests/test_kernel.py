@@ -1551,6 +1551,23 @@ class TestKernelOutputUIExtra:
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         monkeypatch.setattr("kaggle_switch.kernel_outputs.fetch_sizes", lambda files, **kw: None)
 
+    def test_kernel_select_options_status_colors(self):
+        from types import SimpleNamespace
+
+        kernels = [
+            SimpleNamespace(ref="o/ok", status="COMPLETE"),
+            SimpleNamespace(ref="o/bad", status="ERROR"),
+            SimpleNamespace(ref="o/cancel", status="CANCEL_ACKNOWLEDGED"),
+            SimpleNamespace(ref="o/pend", status="QUEUED"),
+            SimpleNamespace(ref="o/none", status=None),
+        ]
+        opts = kn._kernel_select_options(kernels)
+        assert "\x1b[32m" in opts[0] and "COMPLETE" in opts[0]
+        assert "\x1b[1;31m" in opts[1] and "ERROR" in opts[1]
+        assert "\x1b[35m" in opts[2] and "CANCEL_ACKNOWLEDGED" in opts[2]
+        assert "\x1b[36m" in opts[3] and "QUEUED" in opts[3]
+        assert "(None)" not in opts[4] and "o/none" not in opts[4]
+
     def test_empty_files_returns_empty(self, monkeypatch):
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         assert kn._select_output_files([], "owner/slug") == []

@@ -91,6 +91,13 @@ class TestFitPlain:
     def test_width_one(self):
         assert display._fit_plain("abcdef", 1) == "a"
 
+    def test_preserves_ansi_when_fits(self):
+        coded = "\x1b[32mCOMPLETE\x1b[0m"
+        assert display._fit_plain(coded, 20) == coded
+
+    def test_truncation_strips_ansi(self):
+        assert display._fit_plain("\x1b[32mabcdef\x1b[0m", 4) == "abc…"
+
 
 # ── _auth_method ────────────────────────────────────────────────
 

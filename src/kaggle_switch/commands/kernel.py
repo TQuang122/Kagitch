@@ -581,8 +581,12 @@ def _kernel_select_options(kernels: list) -> list[str]:
         "error": "1;31",
         "RUNNING": "33",
         "running": "33",
-        "CANCEL_ACKNOWLEDGED": "90",
-        "cancel_acknowledged": "90",
+        "QUEUED": "36",
+        "queued": "36",
+        "PENDING": "36",
+        "pending": "36",
+        "CANCEL_ACKNOWLEDGED": "35",
+        "cancel_acknowledged": "35",
     }
     options: list[str] = []
     for i, k in enumerate(kernels, 1):
