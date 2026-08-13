@@ -934,3 +934,69 @@ class TestTryKaggleApi:
             result = lv._try_kaggle_api()
         assert result is fake_api
         fake_api.authenticate.assert_called_once_with()
+
+
+def _mojibake(text: str, codec: str = "latin-1") -> str:
+    """Simulate UTF-8 bytes decoded with the wrong codec."""
+    return text.encode("utf-8").decode(codec)
+
+
+class TestRepairUtf8:
+    def test_repairs_latin1_mojibake(self):
+        from kaggle_switch.logs_viewer import _repair_utf8
+
+        assert _repair_utf8(_mojibake("Tổng kết quả hiện có: 1")) == "Tổng kết quả hiện có: 1"
+        assert _repair_utf8(_mojibake("Hiển thị 10 kết quả cuối")) == "Hiển thị 10 kết quả cuối"
+
+    def test_repairs_cp1252_mojibake(self):
+        from kaggle_switch.logs_viewer import _repair_utf8
+
+        # cp1252 maps 0x95 to U+2022, which latin-1 cannot encode
+        assert _repair_utf8(_mojibake("Tổng", "cp1252")) == "Tổng"
+
+    def test_leaves_valid_utf8_unchanged(self):
+        from kaggle_switch.logs_viewer import _repair_utf8
+
+        assert _repair_utf8("Tổng kết quả hiện có: 1") == "Tổng kết quả hiện có: 1"
+
+    def test_leaves_ascii_unchanged(self):
+        from kaggle_switch.logs_viewer import _repair_utf8
+
+        assert _repair_utf8("plain ascii [1] log line") == "plain ascii [1] log line"
+
+    def test_leaves_non_utf8_latin1_unchanged(self):
+        from kaggle_switch.logs_viewer import _repair_utf8
+
+        # 'café' in latin-1 (0xE9 alone is invalid UTF-8) must pass through
+        assert _repair_utf8("caf\u00e9") == "caf\u00e9"
+
+    def test_stream_events_repair_vietnamese(self):
+        events = [{"data": _mojibake("Tổng kết quả hiện có: 1"), "stream_name": "stdout", "time": 0}]
+        result = _parse_stream_events(events)
+        assert result.entries[0].data == "Tổng kết quả hiện có: 1"
+
+
+class TestRenderTruncation:
+    def test_truncation_suffix_rendered_not_literal(self):
+        """A >260-char line must not leak literal [dim] markup into output."""
+        import io
+
+        from rich.console import Console
+
+        from kaggle_switch.logs_viewer import LogEntry, render_logs
+
+        long_line = "x" * 300
+        result = type("R", (), {
+            "entries": [LogEntry(stream="stdout", timestamp=0, data=long_line)],
+            "error": "",
+        })()
+        sink = io.StringIO()
+        c = Console(file=sink, width=400, force_terminal=False)
+        render_logs(
+            result.entries, console=c,
+            show_progress=False, errors_only=False,
+            summary_view=False, no_group=False,
+        )
+        rendered = sink.getvalue()
+        assert "[dim]...[bright_black]" not in rendered
+        assert "(+45)" in rendered  # 300 - 255

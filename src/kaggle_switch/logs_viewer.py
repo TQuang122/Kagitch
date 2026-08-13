@@ -160,6 +160,24 @@ def _try_kaggle_api() -> object | None:
         return None
 
 
+def _repair_utf8(text: str) -> str:
+    """Repair UTF-8 text that was decoded as Latin-1 or cp1252.
+
+    Mojibake like 'Tá»\x95ng' (meant: 'Tổng') stays ASCII-safe, so
+    re-encoding with the misused codec and decoding as UTF-8 restores
+    it.  Text that is already valid UTF-8 contains characters the
+    codecs cannot encode and passes through unchanged.
+    """
+    for enc in ("latin-1", "cp1252"):
+        try:
+            repaired = text.encode(enc).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        if repaired != text:
+            return repaired
+    return text
+
+
 def _parse_stream_events(events: list[dict]) -> LogFetchResult:
     """Convert structured SSE events into a LogFetchResult."""
     result = LogFetchResult()
@@ -170,7 +188,7 @@ def _parse_stream_events(events: list[dict]) -> LogFetchResult:
         for line in data.rstrip("\n").split("\n"):
             if line:
                 result.entries.append(LogEntry(
-                    stream=stream, timestamp=timestamp, data=line,
+                    stream=stream, timestamp=timestamp, data=_repair_utf8(line),
                 ))
     return result
 
@@ -213,7 +231,7 @@ def _parse_plain_logs(raw: str) -> LogFetchResult:
     if not text:
         return result
     for line in text.split("\n"):
-        result.entries.append(LogEntry(stream="stdout", timestamp=0, data=line))
+        result.entries.append(LogEntry(stream="stdout", timestamp=0, data=_repair_utf8(line)))
     return result
 
 
@@ -669,14 +687,18 @@ def render_logs(
 
         # Truncate very long lines for readability
         display_str = data_str
+        overflow = 0
         if len(display_str) > 260:
-            display_str = display_str[:255] + "[dim]...[bright_black](+{})[/][/]".format(len(display_str) - 255)
+            overflow = len(display_str) - 255
+            display_str = display_str[:255]
 
         # Two-column layout: fixed-width time column | log data column
         time_col = Text(f"{ts}", style="bright_black")
         data_col = Text()
         data_col.append(f"{icon} ", style=style)
         data_col.append(display_str, style=style)
+        if overflow:
+            data_col.append(Text.from_markup(f"[dim]...[bright_black](+{overflow})[/][/]"))
 
         row = Table.grid(padding=0)
         row.add_column(width=8, justify="right")

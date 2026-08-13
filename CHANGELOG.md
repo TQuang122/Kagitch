@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `kagitch kernel logs` now repairs Vietnamese/UTF-8 text that arrives decoded as Latin-1/cp1252 from the kaggle SSE stream (`Tá»ng` → `Tổng`).
+- The truncation suffix on long log lines (`(+N)`) is rendered as styled text instead of leaking literal `[dim]...[/]` markup.
+
 ## [1.5.2] - 2026-08-13
 
 ### Added
