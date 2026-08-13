@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.5.2] - 2026-08-13
 
 ### Added
 - `kagitch kernel output [owner/slug]` — download kernel outputs. Interactive mode lists output files and lets you multi-select files or whole directories (via `questionary.checkbox`); `-a/--all` downloads everything through the kaggle CLI. Supports `-p/--path` for the target directory and `-f/--force` to overwrite existing files.
