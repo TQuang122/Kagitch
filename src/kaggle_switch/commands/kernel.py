@@ -8,12 +8,9 @@ import sys
 import time
 from pathlib import Path
 
-from rich.table import Table
-from rich.text import Text
-
 from .. import display
 from ..config import current_active, find_account, get_accounts, get_token
-from ..style import C_DIM, C_ERROR, C_INFO, C_OK, C_WARN, Console, card, console, err, info, ok
+from ..style import C_DIM, C_ERROR, C_INFO, C_OK, C_WARN, card, console, err, info, ok
 from .switch import _apply_account_env, _active_username_from_account, _refresh_oauth_token  # noqa: F401
 
 # ── kernel init ─────────────────────────────────────────────────
@@ -575,6 +572,29 @@ def cmd_kernel_logs(config: dict, rest: list[str]) -> int:
     return 0
 
 
+def _kernel_select_options(kernels: list) -> list[str]:
+    """Build filterable selector labels for a kernel list (slug only)."""
+    _ANSI_STATUS_COLORS = {
+        "COMPLETE": "32",
+        "complete": "32",
+        "ERROR": "1;31",
+        "error": "1;31",
+        "RUNNING": "33",
+        "running": "33",
+        "CANCEL_ACKNOWLEDGED": "90",
+        "cancel_acknowledged": "90",
+    }
+    options: list[str] = []
+    for i, k in enumerate(kernels, 1):
+        slug = k.ref.split("/", 1)[1] if "/" in k.ref else k.ref
+        label = f"{i}. \x1b[36m{slug}\x1b[0m"
+        if k.status:
+            ansi_color = _ANSI_STATUS_COLORS.get(k.status, "90")
+            label += f"  \x1b[{ansi_color}m({k.status})\x1b[0m"
+        options.append(label)
+    return options
+
+
 def _browse_kernel_logs(config: dict) -> int:
     """Interactive browse: pick account -> pick kernel -> show logs."""
     from ..logs_viewer import (
@@ -598,61 +618,14 @@ def _browse_kernel_logs(config: dict) -> int:
         console.print(err(f"No kernels found for account [bold]{acc.name}[/]"))
         return 1
 
-    _STATUS_STYLES = {
-        "COMPLETE": "green",
-        "complete": "green",
-        "ERROR": "bold red",
-        "error": "bold red",
-        "RUNNING": "yellow",
-        "running": "yellow",
-        "QUEUED": "dim",
-        "queued": "dim",
-        "PENDING": "dim",
-        "pending": "dim",
-    }
-
-    table = Table(
-        title=f"Kernels for [bold]{acc.name}[/]",
-        header_style="bold cyan",
-        border_style="blue",
+    kernel_options = _kernel_select_options(kernels)
+    idx = display._terminal_select(
+        kernel_options,
+        filterable=True,
+        title=f"Kernels for {acc.name} \u00b7 {len(kernels)} kernels",
+        footer="g\u00f5 \u0111\u1ec3 l\u1ecdc \u00b7 \u2191\u2193 ch\u1ecdn \u00b7 "
+        "Enter ch\u1ecdn \u00b7 q tho\u00e1t",
     )
-    table.add_column("#", style="dim", no_wrap=True)
-    table.add_column("Slug", style="cyan", no_wrap=True)
-    table.add_column("Title")
-    table.add_column("Status", no_wrap=True)
-    table.add_column("Last Run", style="dim")
-    for i, k in enumerate(kernels, 1):
-        status_str = k.status if k.status else "-"
-        status_t = Text(status_str, style=_STATUS_STYLES.get(k.status, "dim")) if k.status else Text("-", style="dim")
-        table.add_row(str(i), k.ref, k.title or "-", status_t, k.last_run_time)
-
-    if sys.stderr.isatty():
-        console.print(table)
-    else:
-        tty = display._open_tty("w")
-        if tty is not None:
-            with tty:
-                tty_console = Console(file=tty, force_terminal=True)
-                tty_console.print(table)
-        else:
-            console.print(table)
-
-    _ANSI_STATUS_COLORS = {
-        "COMPLETE": "32",
-        "complete": "32",
-        "ERROR": "1;31",
-        "error": "1;31",
-        "RUNNING": "33",
-        "running": "33",
-    }
-    kernel_options = []
-    for i, k in enumerate(kernels):
-        ref_label = f"{i+1}. \x1b[36m{k.ref}\x1b[0m"
-        if k.status:
-            ansi_color = _ANSI_STATUS_COLORS.get(k.status, "90")
-            ref_label += f"  \x1b[{ansi_color}m({k.status})\x1b[0m"
-        kernel_options.append(ref_label)
-    idx = display._terminal_select(kernel_options)
     if idx is None:
         console.print(info("Cancelled."))
         return 1
@@ -817,61 +790,14 @@ def _pick_kernel_interactive(config: dict) -> str | None:
         console.print(err(f"No kernels found for account [bold]{acc.name}[/]"))
         return None
 
-    _STATUS_STYLES = {
-        "COMPLETE": "green",
-        "complete": "green",
-        "ERROR": "bold red",
-        "error": "bold red",
-        "RUNNING": "yellow",
-        "running": "yellow",
-        "QUEUED": "dim",
-        "queued": "dim",
-        "PENDING": "dim",
-        "pending": "dim",
-    }
-
-    table = Table(
-        title=f"Kernels for [bold]{acc.name}[/]",
-        header_style="bold cyan",
-        border_style="blue",
+    kernel_options = _kernel_select_options(kernels)
+    idx = display._terminal_select(
+        kernel_options,
+        filterable=True,
+        title=f"Kernels for {acc.name} \u00b7 {len(kernels)} kernels",
+        footer="g\u00f5 \u0111\u1ec3 l\u1ecdc \u00b7 \u2191\u2193 ch\u1ecdn \u00b7 "
+        "Enter ch\u1ecdn \u00b7 q tho\u00e1t",
     )
-    table.add_column("#", style="dim", no_wrap=True)
-    table.add_column("Slug", style="cyan", no_wrap=True)
-    table.add_column("Title")
-    table.add_column("Status", no_wrap=True)
-    table.add_column("Last Run", style="dim")
-    for i, k in enumerate(kernels, 1):
-        status_str = k.status if k.status else "-"
-        status_t = Text(status_str, style=_STATUS_STYLES.get(k.status, "dim")) if k.status else Text("-", style="dim")
-        table.add_row(str(i), k.ref, k.title or "-", status_t, k.last_run_time)
-
-    if sys.stderr.isatty():
-        console.print(table)
-    else:
-        tty = display._open_tty("w")
-        if tty is not None:
-            with tty:
-                tty_console = Console(file=tty, force_terminal=True)
-                tty_console.print(table)
-        else:
-            console.print(table)
-
-    _ANSI_STATUS_COLORS = {
-        "COMPLETE": "32",
-        "complete": "32",
-        "ERROR": "1;31",
-        "error": "1;31",
-        "RUNNING": "33",
-        "running": "33",
-    }
-    kernel_options = []
-    for i, k in enumerate(kernels):
-        ref_label = f"{i+1}. \x1b[36m{k.ref}\x1b[0m"
-        if k.status:
-            ansi_color = _ANSI_STATUS_COLORS.get(k.status, "90")
-            ref_label += f"  \x1b[{ansi_color}m({k.status})\x1b[0m"
-        kernel_options.append(ref_label)
-    idx = display._terminal_select(kernel_options)
     if idx is None:
         console.print(info("Cancelled."))
         return None

@@ -927,7 +927,7 @@ class TestBrowseKernelLogs:
         )
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._terminal_select",
-            lambda options: 0,
+            lambda options, **kw: 0,
         )
         monkeypatch.setattr(
             "kaggle_switch.logs_viewer.fetch_logs",
@@ -963,7 +963,7 @@ class TestBrowseKernelLogs:
         )
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._terminal_select",
-            lambda options: 0,
+            lambda options, **kw: 0,
         )
 
         class FakeLogResult:
@@ -980,7 +980,7 @@ class TestBrowseKernelLogs:
             rc = kn._browse_kernel_logs({"accounts": {}})
         assert rc == 0
 
-    def test_happy_path_prints_table_to_console_when_tty(self, monkeypatch, tmp_path):
+    def test_happy_path_uses_filterable_slug_options(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
@@ -990,18 +990,26 @@ class TestBrowseKernelLogs:
         monkeypatch.setattr("kaggle_switch.commands.kernel._apply_account_env", lambda a: None)
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", lambda msg: nullcontext())
         monkeypatch.setattr("kaggle_switch.commands.kernel._active_username_from_account", lambda a: a.name)
-        monkeypatch.setattr(kn.sys.stderr, "isatty", lambda: True)
         kernels = [MockKernelInfo(ref="testacc/kernel1", title="K1", status="COMPLETE", last_run_time="2024-01-01")]
         monkeypatch.setattr("kaggle_switch.logs_viewer.list_kernels", lambda owner: kernels)
-        monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select", lambda options: 0)
-        monkeypatch.setattr("kaggle_switch.logs_viewer.fetch_logs", lambda k: type("R", (), {"error": "", "entries": []})())
-        monkeypatch.setattr("kaggle_switch.logs_viewer.render_result", lambda r, **kw: None)
-        with patch("kaggle_switch.commands.kernel.console.print") as mock_print:
-            rc = kn._browse_kernel_logs({"accounts": {}})
-        assert rc == 0
-        assert any(call.args and getattr(call.args[0], "columns", None) is not None for call in mock_print.call_args_list)
+        captured = {}
 
-    def test_happy_path_prints_table_via_dev_tty_when_not_tty(self, monkeypatch, tmp_path):
+        def fake_select(options, **kw):
+            captured["options"] = options
+            captured["kwargs"] = kw
+            return 0
+
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select", fake_select)
+        monkeypatch.setattr("kaggle_switch.logs_viewer.fetch_logs", lambda k: type("R", (), {"error": "", "entries": []})())
+        monkeypatch.setattr("kaggle_switch.logs_viewer.render_result", lambda r, **kw: None)
+        with patch("kaggle_switch.commands.kernel.console.print"):
+            rc = kn._browse_kernel_logs({"accounts": {}})
+        assert rc == 0
+        assert captured["kwargs"]["filterable"] is True
+        assert "kernel1" in captured["options"][0]
+        assert "testacc/" not in captured["options"][0]
+
+    def test_happy_path_selector_title_counts(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
@@ -1011,19 +1019,23 @@ class TestBrowseKernelLogs:
         monkeypatch.setattr("kaggle_switch.commands.kernel._apply_account_env", lambda a: None)
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", lambda msg: nullcontext())
         monkeypatch.setattr("kaggle_switch.commands.kernel._active_username_from_account", lambda a: a.name)
-        monkeypatch.setattr(kn.sys.stderr, "isatty", lambda: False)
         kernels = [MockKernelInfo(ref="testacc/kernel1", title="K1", status="COMPLETE", last_run_time="2024-01-01")]
         monkeypatch.setattr("kaggle_switch.logs_viewer.list_kernels", lambda owner: kernels)
-        monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select", lambda options: 0)
+        captured = {}
+
+        def fake_select(options, **kw):
+            captured["kwargs"] = kw
+            return 0
+
+        monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select", fake_select)
         monkeypatch.setattr("kaggle_switch.logs_viewer.fetch_logs", lambda k: type("R", (), {"error": "", "entries": []})())
         monkeypatch.setattr("kaggle_switch.logs_viewer.render_result", lambda r, **kw: None)
-        tty_console = MagicMock()
-        with patch("kaggle_switch.commands.kernel.Console", return_value=tty_console) as mock_console_cls, \
-             patch("builtins.open", mock_open()):
+        with patch("kaggle_switch.commands.kernel.console.print"):
             rc = kn._browse_kernel_logs({"accounts": {}})
         assert rc == 0
-        mock_console_cls.assert_called_once()
-        tty_console.print.assert_called()
+        assert "testacc" in captured["kwargs"]["title"]
+        assert "1 kernels" in captured["kwargs"]["title"]
+        assert "lọc" in captured["kwargs"]["footer"]
 
     def test_terminal_select_returns_none(self, monkeypatch, tmp_path):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
@@ -1051,7 +1063,7 @@ class TestBrowseKernelLogs:
         )
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._terminal_select",
-            lambda options: None,
+            lambda options, **kw: None,
         )
         with patch("kaggle_switch.commands.kernel.console.print"):
             rc = kn._browse_kernel_logs({"accounts": {}})
@@ -1329,7 +1341,7 @@ def _patch_browse(monkeypatch, tmp_path, kernels, select_result):
                         lambda a: a.name)
     monkeypatch.setattr("kaggle_switch.logs_viewer.list_kernels", lambda owner: kernels)
     monkeypatch.setattr("kaggle_switch.commands.kernel.display._terminal_select",
-                        lambda options: select_result)
+                        lambda options, **kw: select_result)
 
 
 class TestBrowseKernelOutput:
@@ -1393,8 +1405,8 @@ class TestKernelOutputCoverage:
         assert rc == 1
         assert "timed out" in capsys.readouterr().out
 
-    def test_browse_tty_path(self, capsys, monkeypatch, tmp_path):
-        """Cover the stderr-isatty table render branch in _pick_kernel_interactive."""
+    def test_browse_with_status_color(self, capsys, monkeypatch, tmp_path):
+        """Browse flow with a RUNNING kernel status."""
         from kaggle_switch.kernel_outputs import OutputFile
 
         acc = Account(number=1, name="testacc", config_dir="testacc")
@@ -1402,7 +1414,6 @@ class TestKernelOutputCoverage:
             "kaggle_switch.commands.kernel.display._select_account_interactive",
             lambda c, **kw: acc,
         )
-        monkeypatch.setattr("sys.stderr.isatty", lambda: True)
         _patch_browse(
             monkeypatch, tmp_path, [MockKernelInfo(ref="testacc/k1", status="RUNNING")], 0
         )
@@ -1416,8 +1427,8 @@ class TestKernelOutputCoverage:
 
         assert rc == 0
 
-    def test_browse_open_tty_path(self, capsys, monkeypatch, tmp_path):
-        """Cover the _open_tty fallback render branch with unknown status color."""
+    def test_browse_with_unknown_status_color(self, capsys, monkeypatch, tmp_path):
+        """Browse flow with an unknown kernel status."""
         from kaggle_switch.kernel_outputs import OutputFile
 
         acc = Account(number=1, name="testacc", config_dir="testacc")
@@ -1425,9 +1436,6 @@ class TestKernelOutputCoverage:
             "kaggle_switch.commands.kernel.display._select_account_interactive",
             lambda c, **kw: acc,
         )
-        tty = MagicMock(__enter__=lambda s: s, __exit__=lambda *a: False)
-        monkeypatch.setattr("kaggle_switch.commands.kernel.display._open_tty", lambda mode: tty)
-        monkeypatch.setattr("kaggle_switch.commands.kernel.Console", lambda **kw: MagicMock())
         _patch_browse(
             monkeypatch, tmp_path, [MockKernelInfo(ref="testacc/k1", status="QUEUED")], 0
         )

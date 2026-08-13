@@ -6,6 +6,7 @@
 - `kagitch kernel output [owner/slug]` — download kernel outputs. Interactive mode lists output files and lets you multi-select files or whole directories (via `questionary.checkbox`); `-a/--all` downloads everything through the kaggle CLI. Supports `-p/--path` for the target directory and `-f/--force` to overwrite existing files.
 - Kernel output UI: output structure rendered as a tree with per-file sizes (parallel HEAD requests), live progress bar with speed on TTYs, and a download summary card (size, time, skipped count). Non-TTY stdin degrades gracefully with a hint to use `-a/--all`.
 - `kagitch kernel output` file selection is now a single interactive tree: arrow keys navigate, right/left expand and collapse directories, space toggles a file or an entire directory subtree (with partial-state markers), Enter confirms and `q`/Ctrl-C cancels. Cross-platform raw-terminal key handling (termios on Unix, msvcrt on Windows).
+- Kernel picker in `kernel output`/`kernel logs` browse mode: the full-width Rich table is gone; the interactive selector now lists slug-only rows with status colors, supports type-to-filter (substring, case-insensitive, Backspace to edit) and shows a `Kernels for <account> · N kernels` header.
 
 ### Changed
 - `kaggle quota` fallback now parses `--format json` output first (kaggle CLI >= 2.2.3), keeping the plain-text parser only for older CLIs.

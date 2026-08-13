@@ -653,7 +653,7 @@ class TestTerminalSelectInteractive:
         mock_win.assert_called_once_with(
             ["A", "B", "C"], 1,
             title="", footer="",
-            subtexts=["", "", ""], active_index=None,
+            subtexts=["", "", ""], active_index=None, filterable=False,
         )
 
 
@@ -1274,3 +1274,85 @@ class TestTreeSelectRemaining:
             with patch.object(display, "_open_tty", return_value=None):
                 # non-tty stdin makes the unix loop bail out safely
                 assert display._terminal_tree_select(_make_tree()) is None
+
+
+# ── _terminal_select filtering ─────────────────────────────────
+
+
+_OPTS = ["apple", "apricot", "banana"]
+
+
+class TestTerminalSelectFilterUnix:
+    def _run(self, keys, filterable=True):
+        mock_termios = MagicMock()
+        mock_termios.tcgetattr.return_value = "attrs"
+        with patch.dict("sys.modules", {"termios": mock_termios, "tty": MagicMock()}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                with patch("sys.stdin", _FakeStdin(keys)):
+                    return display._terminal_select_unix(
+                        _OPTS, 0, title="t", footer="f",
+                        subtexts=[""] * 3, active_index=None, filterable=filterable,
+                    )
+
+    def test_type_narrows_and_enter(self):
+        assert self._run(["a", "p", "\r"]) == 0  # apple
+
+    def test_type_then_arrow_maps_original_index(self):
+        assert self._run(["a", "p", "\x1b", "[", "B", "\r"]) == 1  # apricot
+
+    def test_backspace_edits_query(self):
+        assert self._run(["a", "p", "\x7f", "\r"]) == 0  # back to "a" -> apple
+
+    def test_no_match_enter_returns_none(self):
+        assert self._run(["z", "z", "\r"]) is None
+
+    def test_letters_ignored_when_not_filterable(self):
+        assert self._run(["a", "\r"], filterable=False) == 0
+
+
+class TestTerminalSelectFilterWin:
+    def _run(self, keys):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = keys
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=None):
+                return display._terminal_select_win(
+                    _OPTS, 0, title="t", footer="f",
+                    subtexts=[""] * 3, active_index=None, filterable=True,
+                )
+
+    def test_type_narrows_and_enter(self):
+        assert self._run([b"a", b"p", b"\r"]) == 0
+
+    def test_backspace_edits_query(self):
+        assert self._run([b"a", b"p", b"\x08", b"\r"]) == 0
+
+    def test_no_match_enter_returns_none(self):
+        assert self._run([b"z", b"z", b"\r"]) is None
+
+    def test_arrow_after_filter(self):
+        assert self._run([b"a", b"p", b"\xe0", b"P", b"\r"]) == 1
+
+
+class TestTerminalSelectCloseBranches:
+    def test_win_close_error_swallowed(self):
+        mock_msvcrt = MagicMock()
+        mock_msvcrt.getch.side_effect = [b"\r"]
+        mock_tty = MagicMock()
+        mock_tty.close.side_effect = OSError("boom")
+        with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
+            with patch.object(display, "_open_tty", return_value=mock_tty):
+                result = display._terminal_select_win(
+                    ["A", "B"], 0, title="", footer="",
+                    subtexts=["", ""], active_index=None,
+                )
+        assert result == 0
+
+    def test_dispatcher_probe_close_error_swallowed(self):
+        mock_tty = MagicMock()
+        mock_tty.close.side_effect = OSError("boom")
+        with patch.object(display.os, "name", "nt"):
+            with patch.object(display, "_open_tty", return_value=mock_tty):
+                with patch.object(display, "_terminal_select_win", return_value=1) as mock_win:
+                    assert display._terminal_select(["A", "B"], 0) == 1
+        mock_win.assert_called_once()

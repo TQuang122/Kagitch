@@ -341,7 +341,6 @@ def _clear_select_lines(out, nlines: int) -> None:
 
 # ── Terminal select (Unix) ──────────────────────────────────────
 
-
 def _terminal_select_unix(
     options: list[str],
     default_index: int,
@@ -349,15 +348,19 @@ def _terminal_select_unix(
     footer: str,
     subtexts: list[str],
     active_index: int | None,
+    filterable: bool = False,
 ) -> int | None:
     """Unix implementation using termios/tty for raw keyboard input."""
     import termios
     import tty
 
     n = len(options)
+    order = list(range(n))
     sel = max(0, min(default_index, n - 1))
+    query = ""
     tty_out = None
     out = sys.stderr
+
     if not sys.stderr.isatty():
         tty_out = _open_tty("w")
         if tty_out:
@@ -368,13 +371,22 @@ def _terminal_select_unix(
             tty_out.close()
         return default_index if 0 <= default_index < n else 0
 
+    def _apply_filter(q: str) -> list[int]:
+        return [i for i in range(n) if q in options[i].lower()]
+
+    def _build() -> list[str]:
+        ftitle = f"{title}  \u2014 filter: {query}" if query else title
+        filtered = [options[i] for i in order]
+        fsub = [subtexts[i] for i in order]
+        return _build_select_lines(filtered, sel, fsub, active_index, ftitle, footer)
+
     fd = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
     cur_lines: list[str] = []
 
     try:
         tty.setraw(fd)
-        cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+        cur_lines = _build()
         _write_select_lines(out, cur_lines)
 
         while True:
@@ -382,9 +394,9 @@ def _terminal_select_unix(
             if ch == "\x1b":
                 rest = sys.stdin.read(2)
                 if rest == "[A":
-                    sel = (sel - 1) % n
+                    sel = (sel - 1) % max(1, len(order))
                 elif rest == "[B":
-                    sel = (sel + 1) % n
+                    sel = (sel + 1) % max(1, len(order))
                 else:
                     continue
             elif ch in ("\r", "\n"):
@@ -394,11 +406,20 @@ def _terminal_select_unix(
             elif ch in ("q",):
                 sel = -1
                 break
+            elif filterable and ch == "\x7f":
+                if query:
+                    query = query[:-1]
+                    order = _apply_filter(query)
+                    sel = 0
+            elif filterable and ch.isprintable():
+                query += ch
+                order = _apply_filter(query)
+                sel = 0
             else:
                 continue
 
             _clear_select_lines(out, len(cur_lines))
-            cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+            cur_lines = _build()
             _write_select_lines(out, cur_lines)
     except (KeyboardInterrupt, EOFError):
         sel = -1
@@ -409,7 +430,9 @@ def _terminal_select_unix(
         if tty_out:
             tty_out.close()
 
-    return None if sel < 0 else sel
+    if sel < 0:
+        return None
+    return order[sel] if order else None
 
 
 # ── Terminal select (Windows) ────────────────────────────────────
@@ -422,18 +445,30 @@ def _terminal_select_win(
     footer: str,
     subtexts: list[str],
     active_index: int | None,
+    filterable: bool = False,
 ) -> int | None:
     """Windows implementation using msvcrt for raw keyboard input."""
     import msvcrt
 
     n = len(options)
+    order = list(range(n))
     sel = max(0, min(default_index, n - 1))
+    query = ""
     tty_out = _open_tty("w")
     out = tty_out or sys.stderr
     cur_lines: list[str] = []
 
+    def _apply_filter(q: str) -> list[int]:
+        return [i for i in range(n) if q in options[i].lower()]
+
+    def _build() -> list[str]:
+        ftitle = f"{title}  \u2014 filter: {query}" if query else title
+        filtered = [options[i] for i in order]
+        fsub = [subtexts[i] for i in order]
+        return _build_select_lines(filtered, sel, fsub, active_index, ftitle, footer)
+
     try:
-        cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+        cur_lines = _build()
         _write_select_lines(out, cur_lines)
 
         while True:
@@ -441,9 +476,9 @@ def _terminal_select_win(
             if ch in (b"\x00", b"\xe0"):
                 ch2 = msvcrt.getch()
                 if ch2 == b"H":
-                    sel = (sel - 1) % n
+                    sel = (sel - 1) % max(1, len(order))
                 elif ch2 == b"P":
-                    sel = (sel + 1) % n
+                    sel = (sel + 1) % max(1, len(order))
                 else:
                     continue
             elif ch in (b"\r", b"\n"):
@@ -453,11 +488,20 @@ def _terminal_select_win(
             elif ch in (b"q", b"Q"):
                 sel = -1
                 break
+            elif filterable and ch == b"\x08":
+                if query:
+                    query = query[:-1]
+                    order = _apply_filter(query)
+                    sel = 0
+            elif filterable and chr(ch[0]).isprintable():
+                query += ch.decode("latin-1")
+                order = _apply_filter(query)
+                sel = 0
             else:
                 continue
 
             _clear_select_lines(out, len(cur_lines))
-            cur_lines = _build_select_lines(options, sel, subtexts, active_index, title, footer)
+            cur_lines = _build()
             _write_select_lines(out, cur_lines)
     except (KeyboardInterrupt, EOFError):
         sel = -1
@@ -470,7 +514,9 @@ def _terminal_select_win(
             except Exception:
                 pass
 
-    return None if sel < 0 else sel
+    if sel < 0:
+        return None
+    return order[sel] if order else None
 
 
 # ── Terminal select (dispatcher) ────────────────────────────────
@@ -484,18 +530,23 @@ def _terminal_select(
     footer: str = "",
     subtexts: list[str] | None = None,
     active_index: int | None = None,
+    filterable: bool = False,
 ) -> int | None:
     """Arrow-key navigable terminal selection list.
 
     Dispatches to :func:`_terminal_select_unix` or :func:`_terminal_select_win`
     depending on the platform.  Shows options on stderr for shell-wrapper mode.
 
+    When *filterable* is True, typing narrows the list to matching options
+    (substring, case-insensitive); Backspace edits the query.
+
     Args:
         options: Display strings for each option.
         default_index: Index to highlight initially (0-based).
+        filterable: Whether typing should filter the option list.
 
     Returns:
-        Selected index (0-based), or ``None`` if cancelled.
+        Selected index (0-based) into *options*, or ``None`` if cancelled.
     """
     subtexts = subtexts or [""] * len(options)
     n = len(options)
@@ -514,7 +565,7 @@ def _terminal_select(
             pass
         return _terminal_select_win(
             options, default_index, title=title, footer=footer,
-            subtexts=subtexts, active_index=active_index,
+            subtexts=subtexts, active_index=active_index, filterable=filterable,
         )
 
     try:
@@ -525,7 +576,7 @@ def _terminal_select(
 
     return _terminal_select_unix(
         options, default_index, title=title, footer=footer,
-        subtexts=subtexts, active_index=active_index,
+        subtexts=subtexts, active_index=active_index, filterable=filterable,
     )
 
 
@@ -682,7 +733,6 @@ def _build_tree_lines(
 ) -> list[str]:
     """Build ANSI display lines for the interactive tree picker."""
     term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
-    card_width = min(80, term_width - 2)
     lines: list[str] = []
 
     if title:
