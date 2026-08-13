@@ -44,7 +44,22 @@ def _patch_client(monkeypatch, api):
     )
 
 
+def _fake_request(owner, slug, page_size, token, version_label):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        user_name=owner, kernel_slug=slug, page_size=page_size,
+        page_token=token, version_label=version_label,
+    )
+
+
 class TestListOutputFiles:
+    @pytest.fixture(autouse=True)
+    def _no_kagglesdk(self, monkeypatch):
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs._new_list_request", _fake_request
+        )
+
     def test_lists_files_single_page(self, monkeypatch):
         api = FakeListApi([_page([("a.csv", "http://u/a")])])
         _patch_client(monkeypatch, api)
@@ -208,6 +223,9 @@ class TestModuleGuards:
         fake = SimpleNamespace(kernels=SimpleNamespace(kernels_api_client=api))
         monkeypatch.setattr("kaggle_switch.kernel_outputs._HAS_SDK", True)
         monkeypatch.setattr("kaggle_switch.kernel_outputs.KaggleClient", lambda: fake)
+        monkeypatch.setattr(
+            "kaggle_switch.kernel_outputs._new_list_request", _fake_request
+        )
 
         files = list_output_files("owner", "slug")
 
@@ -332,3 +350,24 @@ class TestFetchSizesErrors:
         fetch_sizes(files, session=RaisingHeadSession())
 
         assert files[0].size is None
+
+
+class TestNewListRequest:
+    def test_builds_request_with_fields(self):
+        pytest.importorskip("kagglesdk")
+        from kaggle_switch.kernel_outputs import _new_list_request
+
+        req = _new_list_request("owner", "slug", 100, "tok", "3")
+        assert req.user_name == "owner"
+        assert req.kernel_slug == "slug"
+        assert req.page_size == 100
+        assert req.page_token == "tok"
+        assert req.version_label == "3"
+
+    def test_omits_optional_fields(self):
+        pytest.importorskip("kagglesdk")
+        from kaggle_switch.kernel_outputs import _new_list_request
+
+        req = _new_list_request("owner", "slug", 100, None, None)
+        assert not req.page_token
+        assert not req.version_label

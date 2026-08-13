@@ -545,6 +545,7 @@ class TestCheckerModuleImport:
         assert checker._HAS_SDK is False
 
     def test_ensure_sdk_returns_true_when_available(self, monkeypatch):
+        pytest.importorskip("kagglesdk")
         monkeypatch.setattr("kaggle_switch.checker._HAS_SDK", None)
         monkeypatch.setattr("kaggle_switch.checker.KaggleClient", None)
         assert checker._ensure_sdk() is True
