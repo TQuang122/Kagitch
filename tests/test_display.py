@@ -233,6 +233,8 @@ class TestRenderHelp:
         assert "kagitch check" in clean
         assert "kagitch list" in clean
         assert "kagitch init" in clean
+        assert "kagitch kernel logs" in clean
+        assert "kagitch kernel output" in clean
 
     def test_output_has_version(self, capsys):
         display.render_help()

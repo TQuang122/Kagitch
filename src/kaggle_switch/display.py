@@ -149,6 +149,8 @@ def render_help() -> None:
                 ("kagitch rename <N> <new_name>", "Rename an account"),
                 ("kagitch patch [path]", "Patch kernel-metadata.json id"),
                 ("kagitch kernel init", "Create kernel-metadata.json"),
+                ("kagitch kernel logs [kernel]", "Stream kernel logs"),
+                ("kagitch kernel output [kernel]", "Download kernel outputs (tree picker)"),
             ],
             "Shell integration": [
                 ("kagitch init [-r]", "Interactive setup wizard (7-step)"),

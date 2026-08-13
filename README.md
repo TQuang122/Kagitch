@@ -35,9 +35,8 @@ kagitch add personal  # or: kagitch add personal ~/kaggle.json (legacy key)
 kagitch 2             # switch to account 2
 kagitch check         # check quota for all accounts
 kaggle quota          # kaggle CLI follows the switched account
-kaggle push kernels -p . # # push current folder as a Kaggle kernel
+kaggle push kernels -p . # push current folder as a Kaggle kernel
 ```
-
 ```text
 $ kagitch
 
@@ -74,7 +73,9 @@ $ kagitch
 | `kagitch remove <N\|name>`  | `rm`                     | Remove an account (deletes credentials) |
 | `kagitch rename <N> <name>` |                          | Rename an account                       |
 | `kagitch patch [path]`      |                          | Patch `kernel-metadata.json` id         |
-| `kagitch kernel output [owner/slug]` |                  | Download kernel outputs (interactive file/dir selection, or `-a` for all) |
+| `kagitch kernel init`       |                          | Create `kernel-metadata.json` interactively |
+| `kagitch kernel logs [kernel]` |                       | Stream kernel logs (interactive browse, follow) |
+| `kagitch kernel output [owner/slug]` |                  | Download kernel outputs (interactive tree picker, or `-a` for all) |
 | `kagitch check`             |                          | Check quota & auth for all accounts     |
 | `kagitch doctor`            |                          | System diagnostics                      |
 | `kagitch update`            |                          | Pull latest version from git            |
@@ -84,6 +85,24 @@ $ kagitch
 | `kagitch help`              | `-h`, `--help`           | Show help                               |
 | `kagitch version`           | `-v`, `--version`        | Show version                            |
 
+
+---
+
+## Kernel commands
+
+```bash
+kagitch kernel init                      # create kernel-metadata.json interactively
+kagitch kernel logs <owner/slug>         # stream kernel logs (no ref = interactive browse)
+kagitch kernel output <owner/slug>       # download outputs: pick files on the tree
+kagitch kernel output <owner/slug> -a    # download every output file
+kagitch kernel output <owner/slug> -p out -f   # target dir + overwrite existing
+```
+
+`kagitch kernel output` shows the kernel's output structure as an interactive tree with
+per-file sizes, lets you pick individual files or whole directories (`space` toggles,
+`a` selects/deselects all, arrow keys navigate), streams downloads with a live progress
+bar, and finishes with a summary card. The kernel picker supports type-to-filter and
+color-coded statuses. Requires `kaggle>=2.2.4` (bundles `kagglesdk>=0.1.33`).
 
 ---
 
