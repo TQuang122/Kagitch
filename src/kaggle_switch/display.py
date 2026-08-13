@@ -529,7 +529,9 @@ def _terminal_select(
     )
 
 
-def _select_account_interactive(config: dict) -> Account | None:
+def _select_account_interactive(
+    config: dict, *, title: str = "Choose an account"
+) -> Account | None:
     """Prompt user to pick an account (arrow keys in TTY, fallback prompt in pipes)."""
     accounts = get_accounts(config)
     if not accounts:
@@ -563,7 +565,7 @@ def _select_account_interactive(config: dict) -> Account | None:
         idx = _terminal_select(
             select_options,
             default_index=active_idx,
-            title="Choose account for kernel logs",
+            title=title,
             footer="↑/↓ move • Enter select • q cancel",
             subtexts=select_subtexts,
             active_index=active_idx,
@@ -752,7 +754,9 @@ def _terminal_tree_select_unix(
 
         while True:
             ch = sys.stdin.read(1)
-            if ch == "\x1b":
+            if ch == "":
+                raise EOFError
+            elif ch == "\x1b":
                 rest = sys.stdin.read(2)
                 if rest == "[A":
                     sel = (sel - 1) % len(visible)

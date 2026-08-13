@@ -583,7 +583,7 @@ def _browse_kernel_logs(config: dict) -> int:
         render_result,
     )
 
-    acc = display._select_account_interactive(config)
+    acc = display._select_account_interactive(config, title="Choose account for kernel logs")
     if acc is None:
         return 1
 
@@ -803,7 +803,7 @@ def _pick_kernel_interactive(config: dict) -> str | None:
     """Pick account then kernel interactively; returns a kernel ref."""
     from ..logs_viewer import list_kernels
 
-    acc = display._select_account_interactive(config)
+    acc = display._select_account_interactive(config, title="Choose account for kernel output")
     if acc is None:
         return None
     console.print()

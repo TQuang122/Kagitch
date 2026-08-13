@@ -606,7 +606,7 @@ class TestCmdKernelInitOSError:
     def test_write_failure_returns_1(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         monkeypatch.setattr(Path, "cwd", classmethod(lambda _: tmp_path))
-        monkeypatch.setattr("kaggle_switch.commands.kernel._active_username", lambda c: None)
+        monkeypatch.setattr("kaggle_switch.commands.kernel._active_username", lambda c, **kw: None)
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel._detect_code_file",
             lambda cwd: tmp_path / "train.py",
@@ -869,7 +869,7 @@ class TestBrowseKernelLogs:
     def test_no_account_returns_1(self, monkeypatch):
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._select_account_interactive",
-            lambda c: None,
+            lambda c, **kw: None,
         )
         rc = kn._browse_kernel_logs({"accounts": {}})
         assert rc == 1
@@ -879,7 +879,7 @@ class TestBrowseKernelLogs:
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._select_account_interactive",
-            lambda c: acc,
+            lambda c, **kw: acc,
         )
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel._apply_account_env", lambda a: None
@@ -906,7 +906,7 @@ class TestBrowseKernelLogs:
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._select_account_interactive",
-            lambda c: acc,
+            lambda c, **kw: acc,
         )
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel._apply_account_env", lambda a: None
@@ -942,7 +942,7 @@ class TestBrowseKernelLogs:
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._select_account_interactive",
-            lambda c: acc,
+            lambda c, **kw: acc,
         )
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel._apply_account_env", lambda a: None
@@ -985,7 +985,7 @@ class TestBrowseKernelLogs:
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._select_account_interactive",
-            lambda c: acc,
+            lambda c, **kw: acc,
         )
         monkeypatch.setattr("kaggle_switch.commands.kernel._apply_account_env", lambda a: None)
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", lambda msg: nullcontext())
@@ -1006,7 +1006,7 @@ class TestBrowseKernelLogs:
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._select_account_interactive",
-            lambda c: acc,
+            lambda c, **kw: acc,
         )
         monkeypatch.setattr("kaggle_switch.commands.kernel._apply_account_env", lambda a: None)
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._tty_status", lambda msg: nullcontext())
@@ -1030,7 +1030,7 @@ class TestBrowseKernelLogs:
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel.display._select_account_interactive",
-            lambda c: acc,
+            lambda c, **kw: acc,
         )
         monkeypatch.setattr(
             "kaggle_switch.commands.kernel._apply_account_env", lambda a: None
@@ -1340,20 +1340,20 @@ class TestBrowseKernelOutput:
 
     def test_account_cancel_returns_1(self, monkeypatch):
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
-                            lambda c: None)
+                            lambda c, **kw: None)
         assert kn.cmd_kernel_output({"accounts": {}}, []) == 1
 
     def test_no_kernels_returns_1(self, monkeypatch, tmp_path):
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
-                            lambda c: acc)
+                            lambda c, **kw: acc)
         _patch_browse(monkeypatch, tmp_path, [], 0)
         assert kn.cmd_kernel_output({"accounts": {}}, []) == 1
 
     def test_kernel_cancel_returns_1(self, monkeypatch, tmp_path):
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
-                            lambda c: acc)
+                            lambda c, **kw: acc)
         _patch_browse(monkeypatch, tmp_path, [MockKernelInfo(ref="t/k1")], None)
         assert kn.cmd_kernel_output({"accounts": {}}, []) == 1
 
@@ -1362,7 +1362,7 @@ class TestBrowseKernelOutput:
 
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._select_account_interactive",
-                            lambda c: acc)
+                            lambda c, **kw: acc)
         _patch_browse(monkeypatch, tmp_path, [MockKernelInfo(ref="testacc/k1")], 0)
         monkeypatch.setattr("kaggle_switch.kernel_outputs.list_output_files",
                             lambda o, s, **kw: [OutputFile(path="a.csv", url="http://u/a")])
@@ -1399,7 +1399,8 @@ class TestKernelOutputCoverage:
 
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
-            "kaggle_switch.commands.kernel.display._select_account_interactive", lambda c: acc
+            "kaggle_switch.commands.kernel.display._select_account_interactive",
+            lambda c, **kw: acc,
         )
         monkeypatch.setattr("sys.stderr.isatty", lambda: True)
         _patch_browse(
@@ -1421,7 +1422,8 @@ class TestKernelOutputCoverage:
 
         acc = Account(number=1, name="testacc", config_dir="testacc")
         monkeypatch.setattr(
-            "kaggle_switch.commands.kernel.display._select_account_interactive", lambda c: acc
+            "kaggle_switch.commands.kernel.display._select_account_interactive",
+            lambda c, **kw: acc,
         )
         tty = MagicMock(__enter__=lambda s: s, __exit__=lambda *a: False)
         monkeypatch.setattr("kaggle_switch.commands.kernel.display._open_tty", lambda mode: tty)

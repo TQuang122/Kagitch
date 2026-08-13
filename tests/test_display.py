@@ -848,7 +848,7 @@ class TestSelectAccountInteractive:
         assert result is not None
         assert result.name == "bob"
         kwargs = mock_select.call_args.kwargs
-        assert kwargs["title"] == "Choose account for kernel logs"
+        assert kwargs["title"] == "Choose an account"
         assert "Enter select" in kwargs["footer"]
         assert kwargs["active_index"] == 0
 
@@ -1104,6 +1104,9 @@ class TestTreeSelectUnix:
 
     def test_ctrl_c_cancels(self, capsys):
         assert self._run(["\x03"], capsys) is None
+
+    def test_eof_cancels(self, capsys):
+        assert self._run([], capsys) is None
 
     def test_unknown_esc_ignored(self, capsys):
         # unknown sequence [X then enter confirms
