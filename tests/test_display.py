@@ -1331,16 +1331,31 @@ class TestTerminalSelectFilterUnix:
     def test_letters_ignored_when_not_filterable(self):
         assert self._run(["a", "\r"], filterable=False) == 0
 
+    def test_filter_prompt_renders_empty_query(self, capsys):
+        assert self._run(["\r"]) == 0
+        clean = _ANSI_RE.sub("", capsys.readouterr().err)
+        assert "filter:" in clean
+
+    def test_filter_prompt_shows_query(self, capsys):
+        assert self._run(["a", "p", "\r"]) == 0
+        clean = _ANSI_RE.sub("", capsys.readouterr().err)
+        assert "filter: ap" in clean
+
+    def test_no_filter_prompt_when_not_filterable(self, capsys):
+        assert self._run(["\r"], filterable=False) == 0
+        clean = _ANSI_RE.sub("", capsys.readouterr().err)
+        assert "filter:" not in clean
+
 
 class TestTerminalSelectFilterWin:
-    def _run(self, keys):
+    def _run(self, keys, filterable=True):
         mock_msvcrt = MagicMock()
         mock_msvcrt.getch.side_effect = keys
         with patch.dict("sys.modules", {"msvcrt": mock_msvcrt}, clear=False):
             with patch.object(display, "_open_tty", return_value=None):
                 return display._terminal_select_win(
                     _OPTS, 0, title="t", footer="f",
-                    subtexts=[""] * 3, active_index=None, filterable=True,
+                    subtexts=[""] * 3, active_index=None, filterable=filterable,
                 )
 
     def test_type_narrows_and_enter(self):
@@ -1354,6 +1369,21 @@ class TestTerminalSelectFilterWin:
 
     def test_arrow_after_filter(self):
         assert self._run([b"a", b"p", b"\xe0", b"P", b"\r"]) == 1
+
+    def test_filter_prompt_renders_empty_query(self, capsys):
+        assert self._run([b"\r"]) == 0
+        clean = _ANSI_RE.sub("", capsys.readouterr().err)
+        assert "filter:" in clean
+
+    def test_filter_prompt_shows_query(self, capsys):
+        assert self._run([b"a", b"p", b"\r"]) == 0
+        clean = _ANSI_RE.sub("", capsys.readouterr().err)
+        assert "filter: ap" in clean
+
+    def test_no_filter_prompt_when_not_filterable(self, capsys):
+        assert self._run([b"\r"], filterable=False) == 0
+        clean = _ANSI_RE.sub("", capsys.readouterr().err)
+        assert "filter:" not in clean
 
 
 class TestTerminalSelectCloseBranches:

@@ -281,6 +281,8 @@ def _build_select_lines(
     active_index: int | None,
     title: str,
     footer: str,
+    show_filter: bool = False,
+    query: str = "",
 ) -> list[str]:
     """Build colored ANSI display lines for an interactive select."""
     term_width = max(40, shutil.get_terminal_size((80, 20)).columns)
@@ -291,6 +293,9 @@ def _build_select_lines(
     if title:
         lines.append(f"\x1b[1;36m{title}\x1b[0m")
         lines.append("")
+
+    if show_filter:
+        lines.append(f"\x1b[2mfilter: {query}\x1b[0m")
 
     for i, opt in enumerate(options):
         plain = _fit_plain(opt, inner_width - 6)
@@ -378,10 +383,12 @@ def _terminal_select_unix(
         return [i for i in range(n) if q in options[i].lower()]
 
     def _build() -> list[str]:
-        ftitle = f"{title}  \u2014 filter: {query}" if query else title
         filtered = [options[i] for i in order]
         fsub = [subtexts[i] for i in order]
-        return _build_select_lines(filtered, sel, fsub, active_index, ftitle, footer)
+        return _build_select_lines(
+            filtered, sel, fsub, active_index, title, footer,
+            show_filter=filterable, query=query,
+        )
 
     fd = sys.stdin.fileno()
     old_attr = termios.tcgetattr(fd)
@@ -465,10 +472,12 @@ def _terminal_select_win(
         return [i for i in range(n) if q in options[i].lower()]
 
     def _build() -> list[str]:
-        ftitle = f"{title}  \u2014 filter: {query}" if query else title
         filtered = [options[i] for i in order]
         fsub = [subtexts[i] for i in order]
-        return _build_select_lines(filtered, sel, fsub, active_index, ftitle, footer)
+        return _build_select_lines(
+            filtered, sel, fsub, active_index, title, footer,
+            show_filter=filterable, query=query,
+        )
 
     try:
         cur_lines = _build()
