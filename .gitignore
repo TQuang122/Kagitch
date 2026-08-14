@@ -24,3 +24,9 @@ dataset-metadata.json
 model-metadata.json
 .omo/
 *.cover
+
+# Accidental local artifacts
+CON
+docs/
+package-lock.json
+*-output/
