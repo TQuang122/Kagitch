@@ -151,6 +151,7 @@ def render_help() -> None:
                 ("kagitch kernel init", "Create kernel-metadata.json"),
                 ("kagitch kernel logs [kernel]", "Stream kernel logs"),
                 ("kagitch kernel output [kernel]", "Download kernel outputs (tree picker)"),
+                ("kagitch kernel push [path]", "Push kernel folder to Kaggle"),
             ],
             "Shell integration": [
                 ("kagitch init [-r]", "Interactive setup wizard (7-step)"),

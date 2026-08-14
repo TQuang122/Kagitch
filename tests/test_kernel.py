@@ -1119,6 +1119,45 @@ class TestParseKernelOutputArgs:
         assert kn._parse_kernel_output_args(["a/b", "c/d"]) is None
 
 
+# ── kagitch kernel push ──────────────────────────────────────────
+
+
+class TestParseKernelPushArgs:
+    def test_defaults(self):
+        args = kn._parse_kernel_push_args([])
+        assert args is not None
+        assert args["path"] is None
+        assert args["wait"] is False
+        assert args["dry_run"] is False
+        assert args["help"] is False
+
+    def test_parses_flags(self):
+        args = kn._parse_kernel_push_args(["-w", "--dry-run", "-p", "nb"])
+        assert args["path"] == "nb"
+        assert args["wait"] is True
+        assert args["dry_run"] is True
+
+    def test_positional_is_path(self):
+        args = kn._parse_kernel_push_args(["./notebook"])
+        assert args["path"] == "./notebook"
+
+    def test_help_flag(self):
+        args = kn._parse_kernel_push_args(["--help"])
+        assert args["help"] is True
+
+    def test_unknown_flag_returns_none(self):
+        assert kn._parse_kernel_push_args(["-z"]) is None
+
+    def test_missing_path_value_returns_none(self):
+        assert kn._parse_kernel_push_args(["-p"]) is None
+
+    def test_too_many_positionals_returns_none(self):
+        assert kn._parse_kernel_push_args(["a", "b"]) is None
+
+    def test_path_conflict_returns_none(self):
+        assert kn._parse_kernel_push_args(["-p", "nb", "other"]) is None
+
+
 class _TtyStatus:
     def __enter__(self):
         return None
@@ -1640,3 +1679,104 @@ class TestKernelOutputUIExtra:
 
         assert rc == 1
         assert "sizes failed" in _plain(capsys.readouterr().out)
+
+
+# ── kagitch kernel push ─────────────────────────────────────────
+
+
+class TestCmdKernelPush:
+    def test_help(self, capsys):
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["--help"])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "kagitch kernel push" in out
+
+    def test_bad_args_usage(self, capsys):
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["-z"])
+        assert rc == 1
+        assert "Usage: kagitch kernel push" in capsys.readouterr().out
+
+    def test_auto_switch_fail_returns_1(self, capsys, monkeypatch, tmp_path):
+        kdir = tmp_path / "kkern"
+        kdir.mkdir()
+        (kdir / "kernel-metadata.json").write_text(json.dumps({"id": "auser/my-kernel"}))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: False)
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["kkern"])
+        assert rc == 1
+
+    def test_push_success_subprocess(self, capsys, monkeypatch, tmp_path):
+        kdir = tmp_path / "kkern"
+        kdir.mkdir()
+        (kdir / "kernel-metadata.json").write_text(json.dumps({"id": "auser/my-kernel"}))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        called = {}
+
+        def fake_run(cmd, **kwargs):
+            called["cmd"] = cmd
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr("kaggle_switch.commands.kernel.subprocess.run", fake_run)
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["kkern"])
+        assert rc == 0
+        assert called["cmd"] == ["kaggle", "kernels", "push", "-p", "kkern"]
+
+    def test_push_nonzero_rc(self, capsys, monkeypatch, tmp_path):
+        kdir = tmp_path / "kkern"
+        kdir.mkdir()
+        (kdir / "kernel-metadata.json").write_text(json.dumps({"id": "auser/my-kernel"}))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.subprocess.run",
+            lambda cmd, **kw: SimpleNamespace(returncode=2),
+        )
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["kkern"])
+        assert rc == 2
+
+    def test_push_missing_cli(self, capsys, monkeypatch, tmp_path):
+        kdir = tmp_path / "kkern"
+        kdir.mkdir()
+        (kdir / "kernel-metadata.json").write_text(json.dumps({"id": "auser/my-kernel"}))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.subprocess.run",
+            lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()),
+        )
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["kkern"])
+        assert rc == 1
+        assert "kaggle CLI not found" in capsys.readouterr().out
+
+    def test_dry_run_no_subprocess(self, capsys, monkeypatch, tmp_path):
+        kdir = tmp_path / "kkern"
+        kdir.mkdir()
+        (kdir / "kernel-metadata.json").write_text(json.dumps({"id": "auser/my-kernel"}))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        called = {}
+
+        def fake_run(cmd, **kwargs):
+            called["ran"] = True
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr("kaggle_switch.commands.kernel.subprocess.run", fake_run)
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["kkern", "--dry-run"])
+        assert rc == 0
+        assert "ran" not in called
+        assert "kaggle kernels push" in _plain(capsys.readouterr().out)
+
+    def test_wait_polls_status(self, capsys, monkeypatch, tmp_path):
+        kdir = tmp_path / "kkern"
+        kdir.mkdir()
+        (kdir / "kernel-metadata.json").write_text(json.dumps({"id": "auser/my-kernel"}))
+        monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: tmp_path))
+        monkeypatch.setattr("kaggle_switch.commands.kernel._auto_switch_for_kernel", lambda c, r: True)
+        monkeypatch.setattr(
+            "kaggle_switch.commands.kernel.subprocess.run",
+            lambda cmd, **kw: SimpleNamespace(returncode=0),
+        )
+        monkeypatch.setattr("kaggle_switch.logs_viewer.get_kernel_status", lambda ref: "COMPLETE")
+        rc = kn.cmd_kernel_push({"accounts": {}}, ["kkern", "--wait"])
+        assert rc == 0

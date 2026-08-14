@@ -707,6 +707,134 @@ def _parse_kernel_output_args(rest: list[str]) -> dict | None:
     }
 
 
+# ── kernel push ─────────────────────────────────────────────────
+
+
+def _kernel_push_help() -> None:
+    """Print focused help for `kagitch kernel push`."""
+    console.print("[bold]Usage:[/bold]")
+    console.print(
+        "  [green]kagitch kernel push \[path] \[options][/]"
+    )
+    console.print()
+    console.print("[bold]Options:[/bold]")
+    console.print("  [cyan]-p, --path DIR[/]   kernel folder (default: current directory)")
+    console.print("  [cyan]-w, --wait[/]       wait for the run to complete")
+    console.print("  [cyan]--dry-run[/]        print the kaggle command without running it")
+    console.print("  [cyan]--help[/]           show this help")
+    console.print()
+    console.print("[bold]Without a path:[/] push the current directory.")
+
+
+def _parse_kernel_push_args(rest: list[str]) -> dict | None:
+    """Parse args for ``kagitch kernel push``.
+
+    Returns a dict with path/wait/dry_run/help keys, or None on bad
+    flags (caller prints usage).
+    """
+    path: str | None = None
+    wait = False
+    dry_run = False
+    show_help = False
+    positional: list[str] = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a in ("-p", "--path"):
+            i += 1
+            if i >= len(rest):
+                return None
+            path = rest[i]
+        elif a in ("-w", "--wait"):
+            wait = True
+        elif a == "--dry-run":
+            dry_run = True
+        elif a in ("--help", "-h", "help"):
+            show_help = True
+        else:
+            if a.startswith("-"):
+                return None
+            positional.append(a)
+        i += 1
+    if len(positional) > 1:
+        return None
+    if positional and path is not None:
+        return None
+    return {
+        "path": positional[0] if positional else path,
+        "wait": wait,
+        "dry_run": dry_run,
+        "help": show_help,
+    }
+
+
+def _kernel_ref_from_metadata(path: Path) -> str | None:
+    """Read the owner/slug id from a kernel folder's kernel-metadata.json."""
+    target = path if path.is_absolute() else Path.cwd() / path
+    if target.is_dir():
+        target = target / "kernel-metadata.json"
+    if not target.exists():
+        return None
+    try:
+        data = _json.loads(target.read_text())
+    except (_json.JSONDecodeError, OSError):
+        return None
+    ref = data.get("id")
+    if not isinstance(ref, str) or "/" not in ref:
+        return None
+    return ref
+
+
+def _wait_for_kernel(ref: str, timeout: int = 600) -> int:
+    """Poll ``kaggle kernels status`` until the run finishes."""
+    from ..logs_viewer import get_kernel_status
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if get_kernel_status(ref) in ("COMPLETE", "ERROR"):
+            return 0
+        time.sleep(5)
+    console.print(err(f"Timed out waiting for [cyan]{ref}[/]"))
+    return 1
+
+
+def cmd_kernel_push(config: dict, rest: list[str]) -> int:
+    """Push a kernel folder via the kaggle CLI."""
+    args = _parse_kernel_push_args(rest)
+    if args is None:
+        console.print(err("Usage: kagitch kernel push [path] [-w|--wait] [--dry-run]"))
+        return 1
+    if args["help"]:
+        _kernel_push_help()
+        return 0
+    path = Path(args["path"]) if args["path"] else Path.cwd()
+    ref = _kernel_ref_from_metadata(path)
+    if ref is None:
+        console.print(err(f"No kernel-metadata.json with an id found in [cyan]{path}[/]"))
+        return 1
+    if not _auto_switch_for_kernel(config, ref):
+        console.print(err(f"Cannot determine owner for [cyan]{ref}[/]"))
+        return 1
+    cmd = ["kaggle", "kernels", "push", "-p", str(path)]
+    if args["dry_run"]:
+        console.print(info(f"Would run: {' '.join(cmd)}"))
+        return 0
+    try:
+        proc = subprocess.run(cmd, timeout=600)
+    except FileNotFoundError:
+        console.print(err("kaggle CLI not found on PATH. Install with: pip install kaggle"))
+        return 1
+    except subprocess.TimeoutExpired:
+        console.print(err("kaggle kernels push timed out after 600s"))
+        return 1
+    if proc.returncode != 0:
+        return proc.returncode
+    console.print(ok(f"Pushed [cyan]{ref}[/]"))
+    if args["wait"]:
+        return _wait_for_kernel(ref)
+    return 0
+
+
 def _download_all_outputs(ref: str, target: Path, force: bool) -> int:
     """Download every output file via the kaggle CLI subprocess."""
     cmd = ["kaggle", "kernels", "output", "download", ref, "-p", str(target)]

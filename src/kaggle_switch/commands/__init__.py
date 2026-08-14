@@ -16,6 +16,7 @@ from .kernel import (
     cmd_kernel_init,
     cmd_kernel_logs,
     cmd_kernel_output,
+    cmd_kernel_push,
     cmd_patch,
 )
 from .setup import cmd_completions, cmd_init, cmd_shellpath, cmd_update
@@ -33,6 +34,7 @@ __all__ = [
     "cmd_kernel_init",
     "cmd_kernel_logs",
     "cmd_kernel_output",
+    "cmd_kernel_push",
     "cmd_list",
     "cmd_list_accounts",
     "cmd_patch",

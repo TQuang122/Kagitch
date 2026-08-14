@@ -16,6 +16,7 @@ from .commands import (
     cmd_kernel_init,
     cmd_kernel_logs,
     cmd_kernel_output,
+    cmd_kernel_push,
     cmd_list,
     cmd_list_accounts,
     cmd_patch,
@@ -108,7 +109,9 @@ def _main() -> int:
             return cmd_kernel_logs(config, rest[1:])
         if rest and rest[0] == "output":
             return cmd_kernel_output(config, rest[1:])
-        console.print(err("Usage: kagitch kernel init | kernel logs <kernel> | kernel output <kernel>"))
+        if rest and rest[0] == "push":
+            return cmd_kernel_push(config, rest[1:])
+        console.print(err("Usage: kagitch kernel init | kernel logs <kernel> | kernel output <kernel> | kernel push <path>"))
         return 1
 
     if cmd == "doctor":
