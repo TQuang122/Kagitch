@@ -714,7 +714,7 @@ def _kernel_push_help() -> None:
     """Print focused help for `kagitch kernel push`."""
     console.print("[bold]Usage:[/bold]")
     console.print(
-        "  [green]kagitch kernel push \[path] \[options][/]"
+        r"  [green]kagitch kernel push \[path] \[options][/]"
     )
     console.print()
     console.print("[bold]Options:[/bold]")
