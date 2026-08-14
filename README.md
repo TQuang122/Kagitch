@@ -76,6 +76,7 @@ $ kagitch
 | `kagitch kernel init`       |                          | Create `kernel-metadata.json` interactively |
 | `kagitch kernel logs [kernel]` |                       | Stream kernel logs (interactive browse, follow) |
 | `kagitch kernel output [owner/slug]` |                  | Download kernel outputs (interactive tree picker, or `-a` for all) |
+| `kagitch kernel push [path]`      |                          | Push kernel from `kernel-metadata.json` (auto-switch account, `--wait`) |
 | `kagitch check`             |                          | Check quota & auth for all accounts     |
 | `kagitch doctor`            |                          | System diagnostics                      |
 | `kagitch update`            |                          | Pull latest version from git            |
@@ -96,13 +97,28 @@ kagitch kernel logs <owner/slug>         # stream kernel logs (no ref = interact
 kagitch kernel output <owner/slug>       # download outputs: pick files on the tree
 kagitch kernel output <owner/slug> -a    # download every output file
 kagitch kernel output <owner/slug> -p out -f   # target dir + overwrite existing
+kagitch kernel push                      # push kernel from kernel-metadata.json (current dir)
+kagitch kernel push -p notebooks/foo     # push from a specific directory
+kagitch kernel push --wait               # push and wait for the run to finish
 ```
+
+`kagitch kernel push` reads `kernel-metadata.json` for the kernel's `owner/slug`, auto-switches
+to the owning account, and runs `kaggle kernels push -p <dir>` (default: current directory).
+Use `--dry-run` to preview, or `--wait` to poll `kaggle kernels status` every 5s until the run
+completes. Requires a `kernel-metadata.json` with an `id` like `owner/slug` — create one with
+`kagitch kernel init`.
 
 `kagitch kernel output` shows the kernel's output structure as an interactive tree with
 per-file sizes, lets you pick individual files or whole directories (`space` toggles,
 `a` selects/deselects all, arrow keys navigate), streams downloads with a live progress
 bar, and finishes with a summary card. The kernel picker supports type-to-filter and
-color-coded statuses. Requires `kaggle>=2.2.4` (bundles `kagglesdk>=0.1.33`).
+color-coded statuses, and the filter prompt (`filter: <query>`) is always visible.
+Requires `kaggle>=2.2.4` (bundles `kagglesdk>=0.1.33`).
+
+`kagitch kernel logs` supports `-f, --follow`, `-n <N>`, `--stdout`, `--stderr`,
+`--show-progress`, `-e, --errors-only`, `--summary`, `--no-group`, and `-b, --browse`
+(interactive picker, no ref needed). `kagitch kernel output` supports `-a, --all`,
+`-p, --path DIR` (default `./<slug>-output`), and `-f, --force`.
 
 ---
 
